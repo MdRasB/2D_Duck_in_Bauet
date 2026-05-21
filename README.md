@@ -7,8 +7,8 @@
 
 **A 2D Side-Scrolling Runner Game built with Java & JavaFX**
 
-[![Build Check](https://img.shields.io/github/actions/workflow/status/<your-username>/DuckDash/build.yml?branch=main&label=Build&style=flat-square&logo=githubactions&logoColor=white)](https://github.com/<your-username>/DuckDash/actions/workflows/build.yml)
-[![Release](https://img.shields.io/github/v/release/<your-username>/DuckDash?style=flat-square&logo=github&logoColor=white&label=Release)](https://github.com/<your-username>/DuckDash/releases/latest)
+[![Build check](https://github.com/MdRasB/Duck_Dash/actions/workflows/build.yml/badge.svg)](https://github.com/MdRasB/Duck_Dash/actions/workflows/build.yml)
+[![Release builds](https://github.com/MdRasB/Duck_Dash/actions/workflows/release.yml/badge.svg)](https://github.com/MdRasB/Duck_Dash/actions/workflows/release.yml)
 [![Java](https://img.shields.io/badge/Java-21-orange?style=flat-square&logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![JavaFX](https://img.shields.io/badge/JavaFX-21-blue?style=flat-square&logo=java&logoColor=white)](https://openjfx.io/)
 [![Maven](https://img.shields.io/badge/Build-Maven-red?style=flat-square&logo=apachemaven&logoColor=white)](https://maven.apache.org/)
