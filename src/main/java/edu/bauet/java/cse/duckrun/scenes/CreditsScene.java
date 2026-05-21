@@ -200,7 +200,7 @@ public class CreditsScene {
                 "Tawfik Rahman Shabab");
         addSpacer(col, 80);
 
-        addRoleEntry(col, "Project Management & Publishing",
+        addRoleEntry(col, "Project Management & Automation",
                 "Muhammad Rasek Biswas");
         addSpacer(col, 80);
 
