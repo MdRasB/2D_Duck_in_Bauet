@@ -20,7 +20,7 @@
 
 ---
 
-[Download](#-download--installation) · [Features](#-features) · [Gameplay](#-gameplay) · [Controls](#-controls) · [Build from Source](#-build-from-source) · [CI / CD Pipeline](#-ci-/-cd-pipeline) · [Project Structure](#-project-structure) · [Team](#-team) · [License](#-license)
+[Download](#-download--installation) · [Features](#-features) · [Gameplay](#-gameplay) · [Controls](#-controls) · [Build from Source](#-build-from-source) · [CI/CD Pipeline](#cicd-pipeline) · [Project Structure](#project-structure) · [Team](#-team) · [License](#-license)
 
 </div>
 
@@ -213,6 +213,8 @@ jpackage \
 
 ---
 
+<a id="cicd-pipeline"></a>
+
 ## ⚙️ CI / CD Pipeline
 
 Duck Dash uses **GitHub Actions** for automated building and releasing.
@@ -248,6 +250,8 @@ git push --tags
 The release job requires `contents: write` permission and uses [`softprops/action-gh-release`](https://github.com/softprops/action-gh-release) to publish.
 
 ---
+
+<a id="project-structure"></a>
 
 ## 🏗️ Project Structure
 
