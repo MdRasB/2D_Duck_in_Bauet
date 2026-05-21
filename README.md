@@ -40,7 +40,7 @@ Developed as a course project for the **Java Programming Laboratory** at **Bangl
 
 ### Windows
 
-1. Go to the [**Latest Release**](https://github.com/MdRasB/DuckDash/releases/latest) page.
+1. Go to the [**Latest Release**](https://github.com/MdRasB/DuckDash/releases/latest/) page.
 2. Download **`DuckDash-windows.exe`**.
 3. Run the installer — it installs the game to `C:\Program Files\DuckDash\`.
 4. Launch the game from the Start Menu, desktop shortcut, or directly:
@@ -53,7 +53,7 @@ C:\Program Files\DuckDash\DuckDash.exe
 
 ### Linux (Debian / Ubuntu)
 
-1. Go to the [**Latest Release**](https://github.com/MdRasB/DuckDash/releases/latest) page.
+1. Go to the [**Latest Release**](https://github.com/MdRasB/DuckDash/releases/latest/) page.
 2. Download **`DuckDash-linux.deb`**.
 3. Install the package:
 
