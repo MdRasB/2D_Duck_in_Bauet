@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # Install packaging tools + GStreamer 1.24 (the version JavaFX 21 is compatible with)
+      # Install packaging tools + GStreamer
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -48,6 +48,7 @@ jobs:
         shell: bash
         run: |
           JAR_FILE=$(ls target/duckrun-*.jar | head -n 1)
+
           jlink \
             --module-path "$JAVA_HOME/jmods:target/deps:$JAR_FILE" \
             --add-modules edu.bauet.java.cse.duckrun \
@@ -62,38 +63,71 @@ jobs:
         run: |
           mkdir -p target/app
           cp target/duckrun-*.jar target/app/
-          cp target/deps/*.jar    target/app/
+          cp target/deps/*.jar target/app/
 
-      # ── Step 1: jpackage → app-image (portable directory, not yet an installer) ──
+      # ═════════════════════════════════════════════════════════════
+      # STEP 1 — Create CLEAN jpackage app-image
+      # ═════════════════════════════════════════════════════════════
       - name: Create app-image
         shell: bash
         run: |
           APP_VERSION="${GITHUB_REF_NAME#v}"
           MAIN_JAR=$(ls target/app/duckrun-*.jar | xargs -n 1 basename)
+
           jpackage \
-            --type         app-image \
-            --name         DuckDash \
-            --app-version  "$APP_VERSION" \
-            --input        target/app \
-            --main-jar     "$MAIN_JAR" \
-            --main-class   edu.bauet.java.cse.duckrun.MainApp \
+            --type app-image \
+            --name DuckDash \
+            --app-version "$APP_VERSION" \
+            --input target/app \
+            --main-jar "$MAIN_JAR" \
+            --main-class edu.bauet.java.cse.duckrun.MainApp \
             --runtime-image target/runtime \
-            --dest         target \
-            --icon         src/main/resources/images/logo/team_logo2.png \
+            --dest target \
+            --icon src/main/resources/images/logo/team_logo2.png \
             --java-options "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
             --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED"
 
-      # ── Step 2: Copy GStreamer 1.24 shared libraries into the app-image ──
-      - name: Bundle GStreamer 1.24 into app-image
+      # ═════════════════════════════════════════════════════════════
+      # STEP 2 — Create .deb from CLEAN image
+      # IMPORTANT:
+      # Never patch launcher before creating .deb
+      # ═════════════════════════════════════════════════════════════
+      - name: Create .deb installer
         shell: bash
         run: |
-          GST_DIR="target/DuckDash/lib/gst"
+          APP_VERSION="${GITHUB_REF_NAME#v}"
+
+          jpackage \
+            --type deb \
+            --app-image target/DuckDash \
+            --name DuckDash \
+            --app-version "$APP_VERSION" \
+            --dest target \
+            --resource-dir src/packaging/linux \
+            --description "2D side-scrolling runner game — help the Duck reach class on time" \
+            --vendor "Duck Dash Team"
+
+      # ═════════════════════════════════════════════════════════════
+      # STEP 3 — Create AppImage-specific copy
+      # ═════════════════════════════════════════════════════════════
+      - name: Prepare AppImage app-image
+        shell: bash
+        run: |
+          cp -r target/DuckDash target/DuckDash-AppImage
+
+      # ═════════════════════════════════════════════════════════════
+      # STEP 4 — Bundle GStreamer ONLY into AppImage copy
+      # ═════════════════════════════════════════════════════════════
+      - name: Bundle GStreamer into AppImage copy
+        shell: bash
+        run: |
+          GST_DIR="target/DuckDash-AppImage/lib/gst"
           GST_PLUGINS="${GST_DIR}/plugins"
+
           mkdir -p "$GST_PLUGINS"
 
           LIB_BASE="/usr/lib/x86_64-linux-gnu"
 
-          # Core GStreamer libraries required by JavaFX's native media bridge
           for lib in \
             libgstreamer-1.0.so.0 \
             libgstbase-1.0.so.0 \
@@ -101,69 +135,70 @@ jobs:
             libgstaudio-1.0.so.0 \
             libgstvideo-1.0.so.0 \
             libgstpbutils-1.0.so.0; do
-            [ -f "${LIB_BASE}/${lib}" ] && cp "${LIB_BASE}/${lib}" "$GST_DIR/"
+
+            [ -f "${LIB_BASE}/${lib}" ] && \
+              cp "${LIB_BASE}/${lib}" "$GST_DIR/"
           done
 
-          # All GStreamer plugin .so files (playback, audio codecs, video decoders, etc.)
           [ -d "${LIB_BASE}/gstreamer-1.0" ] && \
-            cp "${LIB_BASE}/gstreamer-1.0/"*.so "$GST_PLUGINS/" 2>/dev/null || true
+            cp "${LIB_BASE}/gstreamer-1.0/"*.so \
+               "$GST_PLUGINS/" 2>/dev/null || true
 
-          echo "Core libs : $(ls $GST_DIR/*.so  2>/dev/null | wc -l)"
-          echo "Plugins   : $(ls $GST_PLUGINS/*.so 2>/dev/null | wc -l)"
-
-      # ── Step 3: Replace the launcher with a GStreamer wrapper ──
-      - name: Patch app launcher for bundled GStreamer
+      # ═════════════════════════════════════════════════════════════
+      # STEP 5 — Patch ONLY AppImage launcher
+      # IMPORTANT:
+      # Use cp, NEVER mv
+      # ═════════════════════════════════════════════════════════════
+      - name: Patch AppImage launcher
         shell: bash
         run: |
-          LAUNCHER="target/DuckDash/bin/DuckDash"
-          # Preserve the original jpackage-generated launcher
-          mv "$LAUNCHER" "${LAUNCHER}.bin"
+          LAUNCHER="target/DuckDash-AppImage/bin/DuckDash"
+
+          cp "$LAUNCHER" "${LAUNCHER}.bin"
+
           chmod +x "${LAUNCHER}.bin"
-          # Install our wrapper as the primary launcher
+
           cp src/packaging/linux/launcher-wrapper.sh "$LAUNCHER"
+
           chmod +x "$LAUNCHER"
 
-      # ── Step 4: Package the patched app-image into a .deb ──
-      - name: Create .deb installer
-        shell: bash
-        run: |
-          APP_VERSION="${GITHUB_REF_NAME#v}"
-          jpackage \
-            --type         deb \
-            --app-image    target/DuckDash \
-            --name         DuckDash \
-            --app-version  "$APP_VERSION" \
-            --dest         target \
-            --resource-dir src/packaging/linux \
-            --description  "2D side-scrolling runner game — help the Duck reach class on time" \
-            --vendor       "Duck Dash Team"
-
-      # ── Step 5: Wrap the same app-image in an AppImage ──
+      # ═════════════════════════════════════════════════════════════
+      # STEP 6 — Download AppImageTool
+      # ═════════════════════════════════════════════════════════════
       - name: Download appimagetool
         run: |
           wget -q \
             "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
             -O appimagetool-x86_64.AppImage
+
           chmod +x appimagetool-x86_64.AppImage
 
+      # ═════════════════════════════════════════════════════════════
+      # STEP 7 — Build AppImage
+      # ═════════════════════════════════════════════════════════════
       - name: Build AppImage
         shell: bash
         run: |
           APP_VERSION="${GITHUB_REF_NAME#v}"
+
           APPDIR="DuckDash.AppDir"
 
-          # Seed AppDir from the patched app-image
           mkdir -p "$APPDIR"
-          cp -r target/DuckDash/bin "$APPDIR/"
-          cp -r target/DuckDash/lib "$APPDIR/"
 
-          # AppImage-specific files at AppDir root
-          cp  src/packaging/appimage/AppRun        "$APPDIR/AppRun"
+          cp -r target/DuckDash-AppImage/bin "$APPDIR/"
+          cp -r target/DuckDash-AppImage/lib "$APPDIR/"
+
+          cp src/packaging/appimage/AppRun \
+             "$APPDIR/AppRun"
+
           chmod +x "$APPDIR/AppRun"
-          cp  src/packaging/appimage/DuckDash.desktop "$APPDIR/"
-          cp  src/main/resources/images/logo/team_logo2.png "$APPDIR/DuckDash.png"
 
-          # Build the AppImage (APPIMAGE_EXTRACT_AND_RUN bypasses FUSE in CI)
+          cp src/packaging/appimage/DuckDash.desktop \
+             "$APPDIR/"
+
+          cp src/main/resources/images/logo/team_logo2.png \
+             "$APPDIR/DuckDash.png"
+
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
             ./appimagetool-x86_64.AppImage \
             "$APPDIR" \
