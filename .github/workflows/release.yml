@@ -117,8 +117,8 @@ jobs:
         run: |
           LAUNCHER="target/DuckDash/bin/DuckDash"
           # Preserve the original jpackage-generated launcher
-          mv "$LAUNCHER" "${LAUNCHER}.real"
-          chmod +x "${LAUNCHER}.real"
+          mv "$LAUNCHER" "${LAUNCHER}.bin"
+          chmod +x "${LAUNCHER}.bin"
           # Install our wrapper as the primary launcher
           cp src/packaging/linux/launcher-wrapper.sh "$LAUNCHER"
           chmod +x "$LAUNCHER"
