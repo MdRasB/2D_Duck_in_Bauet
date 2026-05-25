@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=DuckDash
+Comment=2D Side-Scrolling Runner Game
+Exec=DuckDash
+Icon=DuckDash
+Type=Application
+Categories=Game;
+Terminal=false
+StartupNotify=true
