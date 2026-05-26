@@ -8,9 +8,14 @@ jobs:
 
   # ═══════════════════════════════════════════════════════════════
   #  LINUX
-  #  Produces two artifacts:
-  #    • DuckDash-linux.deb   — Ubuntu/Debian, GStreamer 1.24 bundled
-  #    • DuckDash-linux.AppImage — universal Linux, fully self-contained
+  #  • .deb  — GStreamer 1.24 bundled; works on Ubuntu 22.04/24.04/26.04
+  #  • .AppImage — fully self-contained; works on any x86_64 Linux
+  #
+  #  Root cause of Ubuntu 26.04 failure:
+  #  JavaFX 21 is incompatible with GStreamer 1.28 (ships on 26.04).
+  #  Solution: build on ubuntu-24.04 (GStreamer 1.24), copy the 1.24
+  #  shared libraries into the bundle, and prepend them to
+  #  LD_LIBRARY_PATH at launch so the system version is never reached.
   # ═══════════════════════════════════════════════════════════════
   build-linux:
     runs-on: ubuntu-24.04
@@ -26,8 +31,7 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # Install packaging tools + GStreamer
-      - name: Install system dependencies
+      - name: Install packaging tools and GStreamer 1.24
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -48,7 +52,6 @@ jobs:
         shell: bash
         run: |
           JAR_FILE=$(ls target/duckrun-*.jar | head -n 1)
-
           jlink \
             --module-path "$JAVA_HOME/jmods:target/deps:$JAR_FILE" \
             --add-modules edu.bauet.java.cse.duckrun \
@@ -63,17 +66,14 @@ jobs:
         run: |
           mkdir -p target/app
           cp target/duckrun-*.jar target/app/
-          cp target/deps/*.jar target/app/
+          cp target/deps/*.jar    target/app/
 
-      # ═════════════════════════════════════════════════════════════
-      # STEP 1 — Create CLEAN jpackage app-image
-      # ═════════════════════════════════════════════════════════════
+      # ── STEP 1: Create jpackage app-image ─────────────────────────────────
       - name: Create app-image
         shell: bash
         run: |
           APP_VERSION="${GITHUB_REF_NAME#v}"
           MAIN_JAR=$(ls target/app/duckrun-*.jar | xargs -n 1 basename)
-
           jpackage \
             --type app-image \
             --name DuckDash \
@@ -87,43 +87,16 @@ jobs:
             --java-options "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
             --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED"
 
-      # ═════════════════════════════════════════════════════════════
-      # STEP 2 — Create .deb from CLEAN image
-      # IMPORTANT:
-      # Never patch launcher before creating .deb
-      # ═════════════════════════════════════════════════════════════
-      - name: Create .deb installer
+      # ── STEP 2: Bundle GStreamer 1.24 into the app-image ──────────────────
+      #    Copies core GStreamer 1.24 shared libraries and all plugin .so files
+      #    from the ubuntu-24.04 runner into target/DuckDash/lib/gst/.
+      #    This directory is used for BOTH the .deb and the AppImage, so both
+      #    packages carry GStreamer 1.24 and never touch the system version.
+      - name: Bundle GStreamer 1.24 into app-image
         shell: bash
         run: |
-          APP_VERSION="${GITHUB_REF_NAME#v}"
-
-          jpackage \
-            --type deb \
-            --app-image target/DuckDash \
-            --name DuckDash \
-            --app-version "$APP_VERSION" \
-            --dest target \
-            --resource-dir src/packaging/linux \
-            --description "2D side-scrolling runner game — help the Duck reach class on time" \
-            --vendor "Duck Dash Team"
-
-      # ═════════════════════════════════════════════════════════════
-      # STEP 3 — Create AppImage-specific copy
-      # ═════════════════════════════════════════════════════════════
-      - name: Prepare AppImage app-image
-        shell: bash
-        run: |
-          cp -r target/DuckDash target/DuckDash-AppImage
-
-      # ═════════════════════════════════════════════════════════════
-      # STEP 4 — Bundle GStreamer ONLY into AppImage copy
-      # ═════════════════════════════════════════════════════════════
-      - name: Bundle GStreamer into AppImage copy
-        shell: bash
-        run: |
-          GST_DIR="target/DuckDash-AppImage/lib/gst"
+          GST_DIR="target/DuckDash/lib/gst"
           GST_PLUGINS="${GST_DIR}/plugins"
-
           mkdir -p "$GST_PLUGINS"
 
           LIB_BASE="/usr/lib/x86_64-linux-gnu"
@@ -135,69 +108,69 @@ jobs:
             libgstaudio-1.0.so.0 \
             libgstvideo-1.0.so.0 \
             libgstpbutils-1.0.so.0; do
-
-            [ -f "${LIB_BASE}/${lib}" ] && \
-              cp "${LIB_BASE}/${lib}" "$GST_DIR/"
+            [ -f "${LIB_BASE}/${lib}" ] && cp "${LIB_BASE}/${lib}" "$GST_DIR/"
           done
 
           [ -d "${LIB_BASE}/gstreamer-1.0" ] && \
-            cp "${LIB_BASE}/gstreamer-1.0/"*.so \
-               "$GST_PLUGINS/" 2>/dev/null || true
+            cp "${LIB_BASE}/gstreamer-1.0/"*.so "$GST_PLUGINS/" 2>/dev/null || true
 
-      # ═════════════════════════════════════════════════════════════
-      # STEP 5 — Patch ONLY AppImage launcher
-      # IMPORTANT:
-      # Use cp, NEVER mv
-      # ═════════════════════════════════════════════════════════════
-      - name: Patch AppImage launcher
+          echo "Core libs bundled : $(ls "$GST_DIR"/*.so  2>/dev/null | wc -l)"
+          echo "Plugins bundled   : $(ls "$GST_PLUGINS"/*.so 2>/dev/null | wc -l)"
+
+      # ── STEP 3: Patch the launcher with the GStreamer env wrapper ──────────
+      #    Renames the jpackage launcher to DuckDash.bin, then installs
+      #    launcher-wrapper.sh as DuckDash. The wrapper prepends the bundled
+      #    lib/gst/ to LD_LIBRARY_PATH before exec-ing DuckDash.bin, so the
+      #    JVM loads GStreamer 1.24 regardless of what the system has installed.
+      - name: Patch app launcher
         shell: bash
         run: |
-          LAUNCHER="target/DuckDash-AppImage/bin/DuckDash"
-
+          LAUNCHER="target/DuckDash/bin/DuckDash"
           cp "$LAUNCHER" "${LAUNCHER}.bin"
-
           chmod +x "${LAUNCHER}.bin"
-
           cp src/packaging/linux/launcher-wrapper.sh "$LAUNCHER"
-
           chmod +x "$LAUNCHER"
 
-      # ═════════════════════════════════════════════════════════════
-      # STEP 6 — Download AppImageTool
-      # ═════════════════════════════════════════════════════════════
+      # ── STEP 4: Create .deb from the patched GStreamer-bundled app-image ───
+      #    IMPORTANT: this must come AFTER steps 2 and 3 so the .deb contains
+      #    both the bundled GStreamer libs and the patched launcher.
+      - name: Create .deb installer
+        shell: bash
+        run: |
+          APP_VERSION="${GITHUB_REF_NAME#v}"
+          jpackage \
+            --type deb \
+            --app-image target/DuckDash \
+            --name DuckDash \
+            --app-version "$APP_VERSION" \
+            --dest target \
+            --resource-dir src/packaging/linux \
+            --description "2D side-scrolling runner game — help the Duck reach class on time" \
+            --vendor "Duck Dash Team"
+
+      # ── STEP 5: Build AppImage from the same patched app-image ─────────────
       - name: Download appimagetool
         run: |
           wget -q \
             "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
             -O appimagetool-x86_64.AppImage
-
           chmod +x appimagetool-x86_64.AppImage
 
-      # ═════════════════════════════════════════════════════════════
-      # STEP 7 — Build AppImage
-      # ═════════════════════════════════════════════════════════════
       - name: Build AppImage
         shell: bash
         run: |
           APP_VERSION="${GITHUB_REF_NAME#v}"
-
           APPDIR="DuckDash.AppDir"
 
           mkdir -p "$APPDIR"
+          cp -r target/DuckDash/bin "$APPDIR/"
+          cp -r target/DuckDash/lib "$APPDIR/"
 
-          cp -r target/DuckDash-AppImage/bin "$APPDIR/"
-          cp -r target/DuckDash-AppImage/lib "$APPDIR/"
-
-          cp src/packaging/appimage/AppRun \
-             "$APPDIR/AppRun"
-
+          cp src/packaging/appimage/AppRun "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
 
-          cp src/packaging/appimage/DuckDash.desktop \
-             "$APPDIR/"
-
-          cp src/main/resources/images/logo/team_logo2.png \
-             "$APPDIR/DuckDash.png"
+          cp src/packaging/appimage/DuckDash.desktop "$APPDIR/"
+          cp src/main/resources/images/logo/team_logo2.png "$APPDIR/DuckDash.png"
 
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
             ./appimagetool-x86_64.AppImage \
@@ -261,16 +234,16 @@ jobs:
         run: |
           MAIN_JAR=$(ls target/app/duckrun-*.jar | xargs -n 1 basename)
           jpackage \
-            --type         exe \
-            --name         DuckDash \
-            --app-version  "${GITHUB_REF_NAME#v}" \
-            --input        target/app \
-            --main-jar     "$MAIN_JAR" \
-            --main-class   edu.bauet.java.cse.duckrun.MainApp \
+            --type exe \
+            --name DuckDash \
+            --app-version "${GITHUB_REF_NAME#v}" \
+            --input target/app \
+            --main-jar "$MAIN_JAR" \
+            --main-class edu.bauet.java.cse.duckrun.MainApp \
             --runtime-image target/runtime \
-            --dest         target \
+            --dest target \
             --resource-dir src/packaging/windows \
-            --icon         src/packaging/windows/DuckDash.ico \
+            --icon src/packaging/windows/DuckDash.ico \
             --java-options "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
             --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED" \
             --win-dir-chooser \
@@ -284,7 +257,7 @@ jobs:
           path: target/*.exe
 
   # ═══════════════════════════════════════════════════════════════
-  #  macOS ARM64 — .dmg (Apple Silicon, M1/M2/M3)
+  #  macOS ARM64 — .dmg (Apple Silicon M1/M2/M3)
   # ═══════════════════════════════════════════════════════════════
   build-macos-arm:
     runs-on: macos-latest
@@ -343,18 +316,18 @@ jobs:
           [ -f src/packaging/macos/DuckDash.icns ] && \
             ICON_ARG="--icon src/packaging/macos/DuckDash.icns"
           jpackage \
-            --type          dmg \
-            --name          DuckDash \
-            --app-version   "${GITHUB_REF_NAME#v}" \
-            --input         target/app \
-            --main-jar      "$MAIN_JAR" \
-            --main-class    edu.bauet.java.cse.duckrun.MainApp \
+            --type dmg \
+            --name DuckDash \
+            --app-version "${GITHUB_REF_NAME#v}" \
+            --input target/app \
+            --main-jar "$MAIN_JAR" \
+            --main-class edu.bauet.java.cse.duckrun.MainApp \
             --runtime-image target/runtime \
-            --dest          target \
-            --resource-dir  src/packaging/macos \
+            --dest target \
+            --resource-dir src/packaging/macos \
             --mac-package-identifier edu.bauet.java.cse.duckrun \
-            --java-options  "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
-            --java-options  "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED" \
+            --java-options "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
+            --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED" \
             $ICON_ARG
 
       - name: Rename DMG with architecture label
@@ -371,7 +344,7 @@ jobs:
           path: target/DuckDash-*-macos-arm64.dmg
 
   # ═══════════════════════════════════════════════════════════════
-  #  RELEASE — collect all artifacts into a GitHub Release
+  #  RELEASE — attach all artifacts to the GitHub Release
   # ═══════════════════════════════════════════════════════════════
   release:
     needs: [build-linux, build-windows, build-macos-arm]
