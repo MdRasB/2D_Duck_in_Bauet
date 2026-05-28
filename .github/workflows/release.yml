@@ -136,14 +136,14 @@ jobs:
         shell: bash
         run: |
           cat > src/packaging/linux/control << 'EOF'
-          Package: PACKAGE_NAME
+          Package: APPLICATION_PACKAGE
           Version: APPLICATION_VERSION
-          Section: SECTION
-          Priority: PRIORITY
-          Maintainer: MAINTAINER
+          Section: misc
+          Priority: optional
           Architecture: ARCH
-          Installed-Size: INSTALL_SIZE
-          Description: DESCRIPTION
+          Maintainer: MAINTAINER
+          Installed-Size: INSTALLED_SIZE
+          Description: APPLICATION_DESCRIPTION
           EOF
 
       # ── STEP 4: Create .deb from the patched GStreamer-bundled app-image ───
