@@ -88,10 +88,6 @@ jobs:
             --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED"
 
       # ── STEP 2: Bundle GStreamer 1.24 into the app-image ──────────────────
-      #    Copies core GStreamer 1.24 shared libraries and all plugin .so files
-      #    from the ubuntu-24.04 runner into target/DuckDash/lib/gst/.
-      #    This directory is used for BOTH the .deb and the AppImage, so both
-      #    packages carry GStreamer 1.24 and never touch the system version.
       - name: Bundle GStreamer 1.24 into app-image
         shell: bash
         run: |
@@ -118,10 +114,6 @@ jobs:
           echo "Plugins bundled   : $(ls "$GST_PLUGINS"/*.so 2>/dev/null | wc -l)"
 
       # ── STEP 3: Patch the launcher with the GStreamer env wrapper ──────────
-      #    Renames the jpackage launcher to DuckDash.bin, then installs
-      #    launcher-wrapper.sh as DuckDash. The wrapper prepends the bundled
-      #    lib/gst/ to LD_LIBRARY_PATH before exec-ing DuckDash.bin, so the
-      #    JVM loads GStreamer 1.24 regardless of what the system has installed.
       - name: Patch app launcher
         shell: bash
         run: |
@@ -130,10 +122,31 @@ jobs:
           chmod +x "${LAUNCHER}.bin"
           cp src/packaging/linux/launcher-wrapper.sh "$LAUNCHER"
           chmod +x "$LAUNCHER"
+          # DuckDash.bin resolves its config as lib/app/<binary-name>.cfg;
+          # jpackage named it DuckDash.cfg — copy so .bin finds it.
+          cp "target/DuckDash/lib/app/DuckDash.cfg" \
+             "target/DuckDash/lib/app/DuckDash.bin.cfg"
+
+      # ── STEP 3.5: Write a control template with no Depends: line ──────────
+      #    jpackage on 24.04 auto-generates Depends: using 24.04 library names
+      #    (libavcodec60, libicu74, …) which don't exist on 26.04.
+      #    Dropping Depends: is safe because the JVM is fully bundled (jlink)
+      #    and GStreamer 1.24 is bundled in lib/gst/ (steps 2-3 above).
+      - name: Override deb control template (suppress auto-generated deps)
+        shell: bash
+        run: |
+          cat > src/packaging/linux/control << 'EOF'
+          Package: PACKAGE_NAME
+          Version: APPLICATION_VERSION
+          Section: SECTION
+          Priority: PRIORITY
+          Maintainer: MAINTAINER
+          Architecture: ARCH
+          Installed-Size: INSTALL_SIZE
+          Description: DESCRIPTION
+          EOF
 
       # ── STEP 4: Create .deb from the patched GStreamer-bundled app-image ───
-      #    IMPORTANT: this must come AFTER steps 2 and 3 so the .deb contains
-      #    both the bundled GStreamer libs and the patched launcher.
       - name: Create .deb installer
         shell: bash
         run: |
