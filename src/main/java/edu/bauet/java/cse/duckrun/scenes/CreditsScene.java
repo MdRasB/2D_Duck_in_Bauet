@@ -1,6 +1,7 @@
 package edu.bauet.java.cse.duckrun.scenes;
 
 import edu.bauet.java.cse.duckrun.MainApp;
+import edu.bauet.java.cse.duckrun.utils.MediaRuntime;
 import edu.bauet.java.cse.duckrun.utils.MusicManager;
 import javafx.animation.*;
 import javafx.application.Platform;
@@ -409,6 +410,7 @@ public class CreditsScene {
         }
 
         if (!MusicManager.getInstance().isMusicEnabled()) return;
+        if (!MediaRuntime.isPlaybackAvailable()) return;
         try {
             URL url = getClass().getResource(CREDITS_MUSIC);
             if (url == null) {
@@ -416,7 +418,10 @@ public class CreditsScene {
                 return;
             }
             Media media = new Media(url.toExternalForm());
-            musicPlayer = new MediaPlayer(media);
+            musicPlayer = MediaRuntime.createPlayer(media, "CreditsScene/credits-music");
+            if (musicPlayer == null) {
+                return;
+            }
             musicPlayer.setCycleCount(MediaPlayer.INDEFINITE);
             musicPlayer.setVolume(0.7);
             musicPlayer.play();

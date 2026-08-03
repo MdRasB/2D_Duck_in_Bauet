@@ -7,6 +7,7 @@ import edu.bauet.java.cse.duckrun.ui.SettingsMenu;
 import edu.bauet.java.cse.duckrun.ui.SleepBar;
 import edu.bauet.java.cse.duckrun.utils.AssetLoader;
 import edu.bauet.java.cse.duckrun.utils.CollisionUtil;
+import edu.bauet.java.cse.duckrun.utils.MediaRuntime;
 import edu.bauet.java.cse.duckrun.utils.MusicManager;
 import edu.bauet.java.cse.duckrun.ui.HealthBar;
 import edu.bauet.java.cse.duckrun.utils.HighScoreManager;
@@ -239,6 +240,7 @@ public class EndlessGameScene {
 
         // Safety check: if loading fails, abort to avoid NullPointerException
         if (introMedia == null || loopMedia == null) return;
+        if (!MediaRuntime.isPlaybackAvailable()) return;
 
         MusicManager mm = MusicManager.getInstance();
 
@@ -248,12 +250,17 @@ public class EndlessGameScene {
         }
 
         // 1. Setup the Looping Player (to be played after the intro)
-        MediaPlayer loopPlayer = new MediaPlayer(loopMedia);
+        MediaPlayer loopPlayer = MediaRuntime.createPlayer(loopMedia, "EndlessGameScene/game-loop");
+        if (loopPlayer == null) return;
         loopPlayer.setCycleCount(MediaPlayer.INDEFINITE);
         loopPlayer.setVolume(0.6);
 
         // 2. Setup the Intro Player (plays once)
-        MediaPlayer introPlayer = new MediaPlayer(introMedia);
+        MediaPlayer introPlayer = MediaRuntime.createPlayer(introMedia, "EndlessGameScene/game-intro");
+        if (introPlayer == null) {
+            loopPlayer.dispose();
+            return;
+        }
         introPlayer.setCycleCount(1);
         introPlayer.setVolume(0.6);
 

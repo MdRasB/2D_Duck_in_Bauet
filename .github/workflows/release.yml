@@ -154,6 +154,51 @@ jobs:
           echo "Core + FFmpeg libs : $(ls "$GST_DIR"/*.so  2>/dev/null | wc -l)"
           echo "Plugins bundled    : $(ls "$GST_PLUGINS"/*.so 2>/dev/null | wc -l)"
 
+      - name: Resolve transitive media dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          GST_DIR="target/DuckDash/lib/gst"
+          GST_PLUGINS="${GST_DIR}/plugins"
+
+          changed=1
+          while [ "$changed" -eq 1 ]; do
+            changed=0
+            while IFS= read -r sofile; do
+              while IFS= read -r dep; do
+                [ -z "$dep" ] && continue
+                base="$(basename "$dep")"
+                if [ ! -f "${GST_DIR}/${base}" ]; then
+                  cp -L "$dep" "${GST_DIR}/${base}"
+                  changed=1
+                fi
+              done < <(ldd "$sofile" | awk '/=> \// {print $3}')
+            done < <(find "$GST_DIR" "$GST_PLUGINS" -maxdepth 1 -type f -name '*.so*')
+          done
+
+          echo "Bundled native media libs after closure: $(find "$GST_DIR" -maxdepth 1 -type f -name '*.so*' | wc -l)"
+
+      - name: Validate bundled media dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          GST_DIR="target/DuckDash/lib/gst"
+          GST_PLUGINS="${GST_DIR}/plugins"
+          failed=0
+
+          while IFS= read -r sofile; do
+            if ldd "$sofile" | grep -q "not found"; then
+              echo "Missing dependency in: $sofile"
+              ldd "$sofile" | grep "not found" || true
+              failed=1
+            fi
+          done < <(find "$GST_DIR" "$GST_PLUGINS" -maxdepth 1 -type f -name '*.so*')
+
+          if [ "$failed" -ne 0 ]; then
+            echo "Bundled media stack is incomplete."
+            exit 1
+          fi
+
       # ── STEP 3: Write smart launcher wrappers and patch the app-image ──────
       #
       #  Uses Python (shell: python3 {0}) to write the wrapper scripts.
