@@ -7,6 +7,7 @@ import edu.bauet.java.cse.duckrun.ui.SettingsMenu;
 import edu.bauet.java.cse.duckrun.ui.SleepBar;
 import edu.bauet.java.cse.duckrun.utils.AssetLoader;
 import edu.bauet.java.cse.duckrun.utils.CollisionUtil;
+import edu.bauet.java.cse.duckrun.utils.MediaRuntime;
 import edu.bauet.java.cse.duckrun.utils.MusicManager;
 import edu.bauet.java.cse.duckrun.ui.HealthBar;
 import edu.bauet.java.cse.duckrun.ui.LevelProgressBar;
@@ -391,17 +392,23 @@ public class GameScene {
         javafx.scene.media.Media loop  = AssetLoader.loadMusic(loopPath);
 
         if (intro == null || loop == null) return;
+        if (!MediaRuntime.isPlaybackAvailable()) return;
 
         MusicManager mm = MusicManager.getInstance();
         if (mm.getBgPlayer() != null) mm.getBgPlayer().stop();
 
         // Prepare the looping player
-        MediaPlayer loopPlayer = new MediaPlayer(loop);
+        MediaPlayer loopPlayer = MediaRuntime.createPlayer(loop, "GameScene/game-loop");
+        if (loopPlayer == null) return;
         loopPlayer.setCycleCount(MediaPlayer.INDEFINITE);
         loopPlayer.setVolume(0.6);
 
         // Prepare the intro player
-        MediaPlayer introPlayer = new MediaPlayer(intro);
+        MediaPlayer introPlayer = MediaRuntime.createPlayer(intro, "GameScene/game-intro");
+        if (introPlayer == null) {
+            loopPlayer.dispose();
+            return;
+        }
         introPlayer.setCycleCount(1);
         introPlayer.setVolume(0.6);
 

@@ -2,6 +2,7 @@ package edu.bauet.java.cse.duckrun.scenes;
 
 import edu.bauet.java.cse.duckrun.MainApp;
 import edu.bauet.java.cse.duckrun.utils.AssetLoader;
+import edu.bauet.java.cse.duckrun.utils.MediaRuntime;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.scene.Scene;
@@ -44,6 +45,11 @@ public class EndingScene {
         System.out.println("Ending video load attempt " + attempt + "/" + MAX_RETRIES);
         root.getChildren().removeIf(n -> n instanceof MediaView);
 
+        if (!MediaRuntime.isPlaybackAvailable()) {
+            navigateToCredits();
+            return;
+        }
+
         String videoUri = AssetLoader.loadVideoUri("/Story/ending.mp4");
         if (videoUri == null) {
             System.out.println("Ending video URI null — going to credits.");
@@ -60,7 +66,11 @@ public class EndingScene {
             return;
         }
 
-        videoPlayer = new MediaPlayer(videoMedia);
+        videoPlayer = MediaRuntime.createPlayer(videoMedia, "EndingScene/ending-video");
+        if (videoPlayer == null) {
+            retryOrFallback(root, attempt);
+            return;
+        }
         videoPlayer.setRate(1.0);
 
         MediaView mv = new MediaView(videoPlayer);

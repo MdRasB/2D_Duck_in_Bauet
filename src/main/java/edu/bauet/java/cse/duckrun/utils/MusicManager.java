@@ -45,7 +45,7 @@ public class MusicManager {
     }
 
     public void playSfx(String resourcePath, double volume) {
-        if (!soundEnabled) return;
+        if (!soundEnabled || !MediaRuntime.isPlaybackAvailable()) return;
 
         try {
             AudioClip clip = sfxCache.get(resourcePath);
@@ -112,7 +112,10 @@ public class MusicManager {
             }
             javafx.scene.media.Media media =
                     new javafx.scene.media.Media(url.toExternalForm());
-            MediaPlayer player = new MediaPlayer(media);
+            MediaPlayer player = MediaRuntime.createPlayer(media, "MusicManager/one-shot");
+            if (player == null) {
+                return;
+            }
             player.setCycleCount(1);
             player.setVolume(volume);
             setBgPlayer(player);

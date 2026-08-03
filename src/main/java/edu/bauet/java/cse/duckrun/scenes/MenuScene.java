@@ -8,6 +8,7 @@ import edu.bauet.java.cse.duckrun.ui.SettingsMenu;
 import edu.bauet.java.cse.duckrun.ui.EndlessLevelMenu;
 import edu.bauet.java.cse.duckrun.ui.MenuBackground;          // ← NEW
 import edu.bauet.java.cse.duckrun.utils.AssetLoader;
+import edu.bauet.java.cse.duckrun.utils.MediaRuntime;
 import edu.bauet.java.cse.duckrun.utils.MusicManager;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -149,17 +150,23 @@ public class MenuScene {
         javafx.scene.media.Media intro = AssetLoader.loadMusic("/audio/music/Square_Cartridge1.mp3");
         javafx.scene.media.Media loop  = AssetLoader.loadMusic("/audio/music/Square_Cartridge2.wav");
         if (intro == null || loop == null) return;
+        if (!MediaRuntime.isPlaybackAvailable()) return;
 
         MusicManager mm = MusicManager.getInstance();
         if (mm.getBgPlayer() != null) mm.getBgPlayer().stop();
 
         // Build the looping player first so it's ready when intro ends
-        MediaPlayer loopPlayer = new MediaPlayer(loop);
+        MediaPlayer loopPlayer = MediaRuntime.createPlayer(loop, "MenuScene/menu-loop");
+        if (loopPlayer == null) return;
         loopPlayer.setCycleCount(MediaPlayer.INDEFINITE);
         loopPlayer.setVolume(0.6);
 
         // Intro plays once, then hands off to the loop player
-        MediaPlayer introPlayer = new MediaPlayer(intro);
+        MediaPlayer introPlayer = MediaRuntime.createPlayer(intro, "MenuScene/menu-intro");
+        if (introPlayer == null) {
+            loopPlayer.dispose();
+            return;
+        }
         introPlayer.setCycleCount(1);
         introPlayer.setVolume(0.6);
         introPlayer.setOnEndOfMedia(() -> {

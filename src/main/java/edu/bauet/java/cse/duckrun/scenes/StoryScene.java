@@ -2,6 +2,7 @@ package edu.bauet.java.cse.duckrun.scenes;
 
 import edu.bauet.java.cse.duckrun.MainApp;
 import edu.bauet.java.cse.duckrun.utils.AssetLoader;
+import edu.bauet.java.cse.duckrun.utils.MediaRuntime;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -49,6 +50,11 @@ public class StoryScene {
 
         root.getChildren().removeIf(n -> n instanceof MediaView);
 
+        if (!MediaRuntime.isPlaybackAvailable()) {
+            showImageFallback(root, stage);
+            return;
+        }
+
         // Get the pre-written temp file URI — fully on disk, no JAR streaming
         String videoUri = AssetLoader.loadVideoUri("/Story/opening2.mp4");
         if (videoUri == null) {
@@ -65,7 +71,11 @@ public class StoryScene {
             return;
         }
 
-        MediaPlayer player = new MediaPlayer(video);
+        MediaPlayer player = MediaRuntime.createPlayer(video, "StoryScene/opening-video");
+        if (player == null) {
+            retryOrFallback(root, stage, mpHolder, attempt);
+            return;
+        }
         mpHolder[0] = player;
 
         player.setRate(1.0);
@@ -178,6 +188,10 @@ public class StoryScene {
         iv.setPreserveRatio(true);
         iv.setSmooth(true);
         root.getChildren().add(0, iv);
+
+        PauseTransition fallbackDelay = new PauseTransition(Duration.seconds(4));
+        fallbackDelay.setOnFinished(e -> navigateToMenu(stage, null));
+        fallbackDelay.play();
     }
 
     private void navigateToMenu(Stage stage, MediaPlayer mp) {
