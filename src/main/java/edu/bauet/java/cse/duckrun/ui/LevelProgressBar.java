@@ -66,6 +66,9 @@ public class LevelProgressBar {
     private final double barY;      // top of the track
     private final double barCenterY;
 
+    // Cached gradient — created once and reused every frame
+    private final LinearGradient filledGradient;
+
     // ── Constructor ──────────────────────────────────────────────────────────
 
     public LevelProgressBar(double screenWidth, double screenHeight) {
@@ -77,6 +80,13 @@ public class LevelProgressBar {
         barWidth  = screenWidth - (MARGIN_X * 2) - DUCK_SIZE;
         barY      = screenHeight - BOTTOM_OFFSET - BAR_HEIGHT;
         barCenterY = barY + BAR_HEIGHT / 2.0;
+
+        filledGradient = new LinearGradient(
+                0, barY, 0, barY + BAR_HEIGHT, false, CycleMethod.NO_CYCLE,
+                new Stop(0.0, Color.rgb(100, 255, 120)),
+                new Stop(0.5, Color.rgb(50,  220, 80)),
+                new Stop(1.0, Color.rgb(30,  160, 55))
+        );
 
         tryLoadSprites();
     }
@@ -180,14 +190,7 @@ public class LevelProgressBar {
         double filled = barWidth * smoothProgress;
         if (filled < 1.0) return;
 
-        // Green gradient fill with a lighter shine on top
-        LinearGradient greenGrad = new LinearGradient(
-                0, barY, 0, barY + BAR_HEIGHT, false, CycleMethod.NO_CYCLE,
-                new Stop(0.0, Color.rgb(100, 255, 120)),
-                new Stop(0.5, Color.rgb(50,  220, 80)),
-                new Stop(1.0, Color.rgb(30,  160, 55))
-        );
-        gc.setFill(greenGrad);
+        gc.setFill(filledGradient);
         gc.fillRoundRect(barX, barY, filled, BAR_HEIGHT, BAR_HEIGHT, BAR_HEIGHT);
 
         // Gloss shine strip

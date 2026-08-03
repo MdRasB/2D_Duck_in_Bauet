@@ -67,6 +67,10 @@
                 <version>0.0.8</version>
                 <configuration>
                     <mainClass>${main.class}</mainClass>
+                    <options>
+                        <option>-Dprism.vsync=false</option>
+                        <option>-Djavafx.animation.fullspeed=true</option>
+                    </options>
                 </configuration>
             </plugin>
 

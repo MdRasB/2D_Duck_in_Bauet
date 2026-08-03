@@ -22,7 +22,7 @@ public class Dog extends Enemy {
      * animate() from wiping the image with null state1/state2 values.
      */
     @Override
-    protected void animate() {
+    protected void animate(double deltaTime) {
         // intentionally no-op: image is managed manually via showHitImage()
     }
 

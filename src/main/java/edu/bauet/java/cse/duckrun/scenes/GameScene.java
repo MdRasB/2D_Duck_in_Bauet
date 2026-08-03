@@ -56,9 +56,13 @@ public class GameScene {
     private AnimationTimer gameLoop;
     private StackPane menuLayer;
 
+    // Cap for downscaled background textures (see createBackground)
+    private static final double MAX_BG_TEXTURE_WIDTH = 2048;
+
     private ImageView background1;
     private ImageView background2;
     private javafx.scene.image.Image transitionImage;
+    private double bgTileWidth;
 
     private boolean isPaused = false;
     private Button pauseButton;
@@ -248,18 +252,27 @@ public class GameScene {
     }
 
     private void createBackground(String path) {
-        Image bgImage = AssetLoader.getImage(path);
+        // Pre-scale the huge background textures (2418-3243px wide) to a
+        // lighter cap to reduce texture memory/bandwidth. The views are still
+        // displayed at their original logical size, so scrolling/wrap timing
+        // and level length are unchanged.
+        Image bgImage = AssetLoader.getDownscaledImage(path, MAX_BG_TEXTURE_WIDTH);
         String transPath = currentLevel.getTransitionImagePath();
-        transitionImage = (transPath != null) ? AssetLoader.getImage(transPath) : null;
+        transitionImage = (transPath != null)
+                ? AssetLoader.getDownscaledImage(transPath, MAX_BG_TEXTURE_WIDTH)
+                : null;
         background1 = new ImageView(bgImage);
         background2 = new ImageView(bgImage);
 
-        background1.setFitHeight(MainApp.WINDOW_HEIGHT);
-        background1.setPreserveRatio(true);
-        background2.setFitHeight(MainApp.WINDOW_HEIGHT);
-        background2.setPreserveRatio(true);
-
+        // Display at the ORIGINAL logical tile width (aspect is preserved by the
+        // downscale, so width/height below reproduce the pre-scaled geometry).
         double width = bgImage.getWidth() * (MainApp.WINDOW_HEIGHT / bgImage.getHeight());
+        bgTileWidth = width;
+
+        background1.setFitWidth(width);
+        background1.setFitHeight(MainApp.WINDOW_HEIGHT);
+        background2.setFitWidth(width);
+        background2.setFitHeight(MainApp.WINDOW_HEIGHT);
 
         background1.setLayoutX(0);
         background2.setLayoutX(width);
@@ -288,7 +301,7 @@ public class GameScene {
         }
         // ────────────────────────────────────────────────────────────────────
 
-        double width = background1.getBoundsInParent().getWidth();
+        double width = bgTileWidth;
 
         if (background1.getLayoutX() <= -width) {
             background1.setLayoutX(background2.getLayoutX() + width);
@@ -304,7 +317,7 @@ public class GameScene {
         if (levelCompleted && !duckRunningOff) {
             ImageView transitionTile = (background1.getImage() == transitionImage)
                     ? background1 : background2;
-            double rightEdge = transitionTile.getLayoutX() + transitionTile.getBoundsInParent().getWidth();
+            double rightEdge = transitionTile.getLayoutX() + bgTileWidth;
             if (rightEdge <= MainApp.WINDOW_WIDTH) {
                 levelCompleted = false;
                 duckRunningOff = true;
@@ -645,7 +658,7 @@ public class GameScene {
                     return;
                 }
 
-                double deltaTime = (now - lastFrameTime) / 1_000_000_000.0;
+                double deltaTime = Math.min((now - lastFrameTime) / 1_000_000_000.0, 0.05);
                 lastFrameTime = now;
 
                 if (!isPaused) {

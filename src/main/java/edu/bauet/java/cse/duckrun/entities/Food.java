@@ -16,6 +16,9 @@ public abstract class Food {
     protected double speed;
     protected boolean active = true;
 
+    // Cached scene-space hitbox, refreshed once per frame in update()
+    private Bounds cachedHitBox;
+
     public Food(double startX,
                 double startY,
                 double worldSpeed,
@@ -44,6 +47,7 @@ public abstract class Food {
         double effectiveSpeed = speed * 60;
         root.setLayoutX(root.getLayoutX() - effectiveSpeed * deltaTime);
         updateHitbox();
+        cachedHitBox = hitbox.localToScene(hitbox.getBoundsInLocal());
 
         if (root.getLayoutX() + view.getBoundsInParent().getWidth() < 0) {
             active = false;
@@ -60,6 +64,7 @@ public abstract class Food {
     }
 
     public Bounds getHitBox() {
+        if (cachedHitBox != null) return cachedHitBox;
         return hitbox.localToScene(hitbox.getBoundsInLocal());
     }
 

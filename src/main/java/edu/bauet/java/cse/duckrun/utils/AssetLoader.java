@@ -1,6 +1,8 @@
 package edu.bauet.java.cse.duckrun.utils;
 
+import javafx.scene.canvas.Canvas;
 import javafx.scene.image.Image;
+import javafx.scene.image.WritableImage;
 import javafx.scene.media.Media;
 
 import java.io.FileOutputStream;
@@ -95,6 +97,28 @@ public final class AssetLoader {
         }
         LOGGER.warning(message + " | Using placeholder image.");
         return createPlaceholderImage();
+    }
+
+    /**
+     * Returns a downscaled copy of the image at {@code path}, capped at
+     * {@code maxWidth} while preserving aspect ratio. If the source is already
+     * smaller than the cap, the original cached image is returned unchanged.
+     * <p>
+     * Used for the large scrolling backgrounds (2418-3243px wide) so the GPU
+     * uploads a smaller texture, reducing memory and texture bandwidth without
+     * changing the on-screen size (the view is displayed at its native size).
+     */
+    public static Image getDownscaledImage(String path, double maxWidth) {
+        Image source = getImage(path);
+        if (source == null || source.getWidth() <= maxWidth) {
+            return source;
+        }
+        double scale = maxWidth / source.getWidth();
+        int newWidth  = (int) Math.ceil(source.getWidth() * scale);
+        int newHeight = (int) Math.ceil(source.getHeight() * scale);
+        Canvas canvas = new Canvas(newWidth, newHeight);
+        canvas.getGraphicsContext2D().drawImage(source, 0, 0, newWidth, newHeight);
+        return canvas.snapshot(null, new WritableImage(newWidth, newHeight));
     }
 
     private static Image createPlaceholderImage() {

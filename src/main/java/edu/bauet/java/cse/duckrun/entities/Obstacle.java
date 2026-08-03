@@ -17,6 +17,9 @@ public abstract class Obstacle {
     protected boolean active = true;
     protected boolean hasCollided = false;
 
+    // Cached scene-space hitbox, refreshed once per frame in update()
+    private Bounds cachedHitBox;
+
     public Obstacle(double startX,
                     double startY,
                     double worldSpeed,
@@ -45,6 +48,7 @@ public abstract class Obstacle {
         double effectiveSpeed = speed * 60; // Convert speed to pixels per second
         root.setLayoutX(root.getLayoutX() - effectiveSpeed * deltaTime);
         updateHitbox();
+        cachedHitBox = hitbox.localToScene(hitbox.getBoundsInLocal());
 
         if (root.getLayoutX() + view.getBoundsInParent().getWidth() < 0) {
             active = false;
@@ -69,6 +73,7 @@ public abstract class Obstacle {
     protected double getHitboxShrinkYBottom() { return 0.1; }
 
     public Bounds getHitBox() {
+        if (cachedHitBox != null) return cachedHitBox;
         return hitbox.localToScene(hitbox.getBoundsInLocal());
     }
 

@@ -61,7 +61,7 @@ public class Duck {
     private double maxY;
     private boolean crouching = false;
 
-    private int frameCounter = 0;
+    private double animationAccumulator = 0.0;
     private boolean toggleFrame = false;
 
     // Path to the stepping sound — swap this to whatever file you place in resources
@@ -142,7 +142,7 @@ public class Duck {
 
         if (runningOff) {
             duckGroup.setLayoutX(duckGroup.getLayoutX() + RUN_OFF_SPEED * deltaTime);
-            animate();
+            animate(deltaTime);
             return;
         }
 
@@ -190,31 +190,49 @@ public class Duck {
             }
         }
 
-        animate();
+        animate(deltaTime);
         updateDebugHitbox();
     }
 
-    private int animationThreshold = 25;
+    private double animationThresholdSeconds = 25.0 / 60.0;
 
-    public void setAnimationThreshold(int threshold) {
-        this.animationThreshold = threshold;
+    public void setAnimationThreshold(int thresholdFrames) {
+        this.animationThresholdSeconds = thresholdFrames / 60.0;
     }
 
-    private void animate() {
+    // Track the previous pose so the sprite swaps immediately when the duck
+    // transitions between run / crouch / sleepy — not only on frame toggles.
+    private boolean lastCrouching = false;
+    private boolean lastJumping   = false;
+    private boolean lastSleepy    = false;
 
-        frameCounter++;
+    private void animate(double deltaTime) {
+
+        // Legs only move while the duck is on the ground (running or crouching),
+        // including during the run-off phase. The accumulator is time-based so the
+        // sprite cadence stays correct at any refresh rate (60 Hz vs 144 Hz).
+        boolean animateLegs = runningOff || !jumping;
         boolean frameJustToggled = false;
 
-        if (frameCounter >= animationThreshold) {
-            toggleFrame = !toggleFrame;
-            frameCounter = 0;
-            frameJustToggled = true;
+        if (animateLegs) {
+            animationAccumulator += deltaTime;
+            if (animationAccumulator >= animationThresholdSeconds) {
+                animationAccumulator -= animationThresholdSeconds;
+                toggleFrame = !toggleFrame;
+                frameJustToggled = true;
+            }
         }
 
+        boolean stateChanged = (crouching != lastCrouching)
+                || (jumping != lastJumping)
+                || (sleepy != lastSleepy);
+
         if (crouching && !jumping) {
-            duckView.setImage(toggleFrame
-                    ? (sleepy ? duckingImageSleepy         : duckingImage)
-                    : (sleepy ? duckingMidPointImageSleepy : duckingMidPointImage));
+            if (frameJustToggled || stateChanged) {
+                duckView.setImage(toggleFrame
+                        ? (sleepy ? duckingImageSleepy         : duckingImage)
+                        : (sleepy ? duckingMidPointImageSleepy : duckingMidPointImage));
+            }
             duckView.setLayoutY(groundLine - DISPLAY_HEIGHT + 15);
 
             // Play step sound on each waddle frame while crouching
@@ -223,9 +241,11 @@ public class Duck {
             }
 
         } else if (!jumping) {
-            duckView.setImage(toggleFrame
-                    ? (sleepy ? runningImageSleepy         : runningImage)
-                    : (sleepy ? runningMidPointImageSleepy : runningMidPointImage));
+            if (frameJustToggled || stateChanged) {
+                duckView.setImage(toggleFrame
+                        ? (sleepy ? runningImageSleepy         : runningImage)
+                        : (sleepy ? runningMidPointImageSleepy : runningMidPointImage));
+            }
             double runOffset = toggleFrame ? -2 : 0;
             duckView.setLayoutY(groundLine - DISPLAY_HEIGHT + runOffset);
 
@@ -235,6 +255,10 @@ public class Duck {
             }
         }
         // No step sound while jumping — duck is airborne
+
+        lastCrouching = crouching;
+        lastJumping   = jumping;
+        lastSleepy    = sleepy;
     }
 
     private void updateDebugHitbox() {
@@ -243,6 +267,7 @@ public class Duck {
         debugHitbox.setY(localBounds.getMinY());
         debugHitbox.setWidth(localBounds.getWidth());
         debugHitbox.setHeight(localBounds.getHeight());
+        cachedHitBox = debugHitbox.localToScene(debugHitbox.getBoundsInLocal());
     }
 
     public boolean isJumping() {
@@ -378,7 +403,11 @@ public class Duck {
         );
     }
 
+    // Cached scene-space hitbox, refreshed once per frame in updateDebugHitbox()
+    private Bounds cachedHitBox;
+
     public Bounds getHitBox() {
+        if (cachedHitBox != null) return cachedHitBox;
         return debugHitbox.localToScene(debugHitbox.getBoundsInLocal());
     }
 

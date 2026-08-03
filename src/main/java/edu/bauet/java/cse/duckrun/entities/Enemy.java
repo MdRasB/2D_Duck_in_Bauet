@@ -19,11 +19,14 @@ public abstract class Enemy {
     protected Image state2;
 
     protected double speed;
-    protected int frameCounter = 0;
+    protected double flapAccumulator = 0.0;
     protected boolean toggleFrame = false;
 
     protected boolean active = true;
     protected boolean hasCollided = false;
+
+    // Cached scene-space hitbox, refreshed once per frame in update()
+    protected Bounds cachedHitBox;
 
     public Enemy(double startX,
                  double startY,
@@ -55,8 +58,9 @@ public abstract class Enemy {
 
         double effectiveSpeed = speed * 60;
         root.setLayoutX(root.getLayoutX() - effectiveSpeed * deltaTime);
-        animate();
+        animate(deltaTime);
         updateDebugHitbox();
+        cachedHitBox = debugHitbox.localToScene(debugHitbox.getBoundsInLocal());
 
         if (root.getLayoutX() + view.getBoundsInParent().getWidth() < 0) {
             active = false;
@@ -76,15 +80,22 @@ public abstract class Enemy {
         debugHitbox.setHeight(viewBounds.getHeight() - shrinkYTop - shrinkYBottom);
     }
 
-    protected void animate() {
-        frameCounter++;
+    // Time-based flap so the animation cadence stays correct at any refresh
+    // rate (60 Hz vs 144 Hz). Threshold preserved at the original 30 frames
+    // (0.5 s per flap) so existing visual behaviour is unchanged.
+    protected void animate(double deltaTime) {
+        flapAccumulator += deltaTime;
+        boolean frameJustToggled = false;
 
-        if (frameCounter >= 30) {
+        if (flapAccumulator >= 30.0 / 60.0) {
+            flapAccumulator -= 30.0 / 60.0;
             toggleFrame = !toggleFrame;
-            frameCounter = 0;
+            frameJustToggled = true;
         }
 
-        view.setImage(toggleFrame ? state1 : state2);
+        if (frameJustToggled) {
+            view.setImage(toggleFrame ? state1 : state2);
+        }
     }
 
     // Default hitbox shrinking values (can be overridden by subclasses)
@@ -94,6 +105,7 @@ public abstract class Enemy {
     protected double getHitboxShrinkYBottom() { return 0.2; } // Default shrink from bottom
 
     public Bounds getHitBox() {
+        if (cachedHitBox != null) return cachedHitBox;
         return debugHitbox.localToScene(debugHitbox.getBoundsInLocal());
     }
 

@@ -5,6 +5,8 @@ import javafx.scene.media.Media;
 import javafx.scene.media.MediaPlayer;
 
 import java.net.URL;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Singleton that manages background music and sound effects.
@@ -27,6 +29,9 @@ public class MusicManager {
     /** Background music player — kept here for future use. */
     private MediaPlayer bgPlayer;
 
+    /** Cache of pre-loaded AudioClip instances — avoids I/O per SFX call. */
+    private final Map<String, AudioClip> sfxCache = new HashMap<>();
+
     // ── Sound Effects ─────────────────────────────────────────────────────────
 
     /**
@@ -43,12 +48,16 @@ public class MusicManager {
         if (!soundEnabled) return;
 
         try {
-            URL url = MusicManager.class.getResource(resourcePath);
-            if (url == null) {
-                System.err.println("MusicManager: SFX not found: " + resourcePath);
-                return;
+            AudioClip clip = sfxCache.get(resourcePath);
+            if (clip == null) {
+                URL url = MusicManager.class.getResource(resourcePath);
+                if (url == null) {
+                    System.err.println("MusicManager: SFX not found: " + resourcePath);
+                    return;
+                }
+                clip = new AudioClip(url.toExternalForm());
+                sfxCache.put(resourcePath, clip);
             }
-            AudioClip clip = new AudioClip(url.toExternalForm());
             clip.setVolume(volume);
             clip.play();
         } catch (Exception e) {
