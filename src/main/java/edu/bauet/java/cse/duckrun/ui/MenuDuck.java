@@ -50,8 +50,8 @@ public class MenuDuck {
     private long lastNano = -1;
 
     // animation state
-    private int     frameCounter = 0;
-    private boolean toggleFrame  = false;
+    private double  frameAccumulator = 0.0;
+    private boolean toggleFrame      = false;
 
     // spawn / active state
     private boolean active         = false;  // duck is currently on screen
@@ -109,11 +109,11 @@ public class MenuDuck {
             duckX += (goingRight ? 1 : -1) * DUCK_SPEED * dt;
             duckView.setLayoutX(duckX);
 
-            // animate legs
-            frameCounter++;
-            if (frameCounter >= FRAME_THRESHOLD) {
+            // animate legs (time-based so cadence matches at any refresh rate)
+            frameAccumulator += dt;
+            if (frameAccumulator >= FRAME_THRESHOLD / 60.0) {
+                frameAccumulator -= FRAME_THRESHOLD / 60.0;
                 toggleFrame = !toggleFrame;
-                frameCounter = 0;
                 // slight vertical bob: -2px on one frame, 0 on the other
                 double runOffset = toggleFrame ? -2 : 0;
                 duckView.setImage(toggleFrame ? runningImage : runningMidImage);
@@ -158,9 +158,9 @@ public class MenuDuck {
         duckView.setImage(runningImage);
         duckView.setVisible(true);
 
-        frameCounter = 0;
-        toggleFrame  = false;
-        active       = true;
+        frameAccumulator = 0.0;
+        toggleFrame      = false;
+        active           = true;
     }
 
     private void deactivate() {

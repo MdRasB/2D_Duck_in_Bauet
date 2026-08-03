@@ -64,6 +64,10 @@ public class EndlessGameScene {
 
     private ImageView background1;
     private ImageView background2;
+    private double bgTileWidth;
+
+    // Cap for downscaled background textures (see createBackground)
+    private static final double MAX_BG_TEXTURE_WIDTH = 2048;
 
     private boolean isPaused = false;
     private Button pauseButton;
@@ -182,14 +186,18 @@ public class EndlessGameScene {
     }
 
     private void createBackground(String path) {
-        Image bgImage = AssetLoader.getImage(path);
+        // Pre-scale the huge background texture (2418-3243px wide) to a lighter
+        // cap to reduce texture memory/bandwidth; displayed at the original
+        // logical size so scrolling/wrap timing is unchanged.
+        Image bgImage = AssetLoader.getDownscaledImage(path, MAX_BG_TEXTURE_WIDTH);
         background1 = new ImageView(bgImage);
         background2 = new ImageView(bgImage);
-        background1.setFitHeight(MainApp.WINDOW_HEIGHT);
-        background1.setPreserveRatio(true);
-        background2.setFitHeight(MainApp.WINDOW_HEIGHT);
-        background2.setPreserveRatio(true);
         double width = bgImage.getWidth() * (MainApp.WINDOW_HEIGHT / bgImage.getHeight());
+        bgTileWidth = width;
+        background1.setFitWidth(width);
+        background1.setFitHeight(MainApp.WINDOW_HEIGHT);
+        background2.setFitWidth(width);
+        background2.setFitHeight(MainApp.WINDOW_HEIGHT);
         background1.setLayoutX(0);
         background2.setLayoutX(width);
     }
@@ -330,7 +338,7 @@ public class EndlessGameScene {
             @Override
             public void handle(long now) {
                 if (lastFrameTime == 0) { lastFrameTime = now; return; }
-                double deltaTime = (now - lastFrameTime) / 1_000_000_000.0;
+                double deltaTime = Math.min((now - lastFrameTime) / 1_000_000_000.0, 0.05);
                 lastFrameTime = now;
 
                 if (!isPaused) {
@@ -395,7 +403,7 @@ public class EndlessGameScene {
         background1.setLayoutX(background1.getLayoutX() - move);
         background2.setLayoutX(background2.getLayoutX() - move);
 
-        double width = background1.getBoundsInParent().getWidth();
+        double width = bgTileWidth;
         if (background1.getLayoutX() <= -width)
             background1.setLayoutX(background2.getLayoutX() + width);
         if (background2.getLayoutX() <= -width)
