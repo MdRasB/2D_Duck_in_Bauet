@@ -45,7 +45,7 @@ public class MusicManager {
     }
 
     public void playSfx(String resourcePath, double volume) {
-        if (!soundEnabled) return;
+        if (!soundEnabled || !MediaRuntime.isPlaybackAvailable()) return;
 
         try {
             AudioClip clip = sfxCache.get(resourcePath);
