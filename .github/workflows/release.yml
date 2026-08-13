@@ -7,27 +7,25 @@ on:
 jobs:
 
   # ═══════════════════════════════════════════════════════════════
-  #  LINUX
-  #  • .deb      — self-contained; works on Ubuntu 22.04/24.04/26.04+
-  #  • .AppImage — fully self-contained; works on any x86_64 Linux
+  #  LINUX — .deb installer
   #
-  #  Root cause of Ubuntu 26.04 failure:
-  #  JavaFX 21 is incompatible with GStreamer 1.28 (ships on 26.04).
+  #  Fully independent job. Does its own checkout → build → jlink →
+  #  jpackage, from scratch. Shares no step, artifact, or app-image
+  #  with build-linux-appimage below — a failure or change on one
+  #  side can never affect the other.
   #
-  #  Fix:
-  #  1. Build on ubuntu-24.04 and bundle GStreamer 1.24 core libs.
-  #  2. ALSO bundle FFmpeg 6.x (libavcodec.so.60 etc.) — the
-  #     gstreamer1.0-libav plugin hard-links these SONAMEs; Ubuntu 26.04
-  #     ships FFmpeg 7.x (libavcodec.so.61) so without bundling the
-  #     libav plugin silently fails → "Could not create player!".
-  #  3. ALSO bundle liborc-0.4 (GStreamer SIMD library) to avoid minor
-  #     version mismatches between Ubuntu releases.
-  #  4. Smart launcher wrapper: checks system GStreamer at runtime.
-  #     • system GStreamer < 1.28  → use system (Ubuntu 22.04/24.04)
-  #     • system GStreamer ≥ 1.28  → prepend bundled libs (Ubuntu 26.04+)
+  #  No vendored GStreamer/FFmpeg/orc, no dependency-closure walk.
+  #  JavaFX 21's media module talks to whatever GStreamer 1.x the
+  #  target machine already has installed — this is the standard,
+  #  documented way OpenJFX Media works on Linux. The Depends: line
+  #  in the control template below tells apt/dpkg exactly which
+  #  GStreamer plugin sets DuckDash needs, so `apt install ./*.deb`
+  #  (or a plain `dpkg -i` followed by `apt --fix-broken install`)
+  #  pulls them in automatically. That is what fixes MP4 playback on
+  #  a fresh machine — the correct decoders are declared, not copied.
   # ═══════════════════════════════════════════════════════════════
-  build-linux:
-    runs-on: ubuntu-24.04
+  build-linux-deb:
+    runs-on: ubuntu-24.04   # pinned for reproducible build tooling only
 
     steps:
       - name: Checkout
@@ -40,19 +38,10 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Install packaging tools and GStreamer 1.24
+      - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            fakeroot dpkg binutils \
-            libgstreamer1.0-0 \
-            libgstreamer-plugins-base1.0-0 \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly \
-            gstreamer1.0-libav \
-            gstreamer1.0-pulseaudio
+          sudo apt-get install -y fakeroot dpkg binutils
 
       - name: Build with Maven
         run: mvn clean package -DskipTests
@@ -77,7 +66,122 @@ jobs:
           cp target/duckrun-*.jar target/app/
           cp target/deps/*.jar    target/app/
 
-      # ── STEP 1: Create jpackage app-image ─────────────────────────────────
+      # jpackage on Ubuntu auto-generates a Depends: line filled with
+      # exact SONAME-versioned library packages (libavcodec60, libicu74,
+      # …). Those exact names are frequently renamed or version-bumped
+      # between Ubuntu releases, so a .deb built this way can fail to
+      # install on any release other than the one it was built on.
+      # Providing our own control template replaces that with a short,
+      # stable list of real Debian/Ubuntu package names that have held
+      # the same names across releases for years.
+      - name: Write deb control template
+        shell: bash
+        run: |
+          printf '%s\n' \
+            'Package: APPLICATION_PACKAGE' \
+            'Version: APPLICATION_VERSION' \
+            'Section: misc' \
+            'Priority: optional' \
+            'Architecture: amd64' \
+            'Maintainer: MAINTAINER' \
+            'Installed-Size: INSTALL_SIZE' \
+            'Depends: gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav, gstreamer1.0-pulseaudio | gstreamer1.0-alsa' \
+            'Description: APPLICATION_DESCRIPTION' \
+            > src/packaging/linux/control
+
+      # Single jpackage call, straight from --input to --type deb.
+      # No intermediate app-image is needed — that indirection only
+      # existed to give a previous version of this pipeline a place
+      # to inject vendored native libraries before packaging.
+      - name: Create .deb installer
+        shell: bash
+        run: |
+          APP_VERSION="${GITHUB_REF_NAME#v}"
+          MAIN_JAR=$(ls target/app/duckrun-*.jar | xargs -n 1 basename)
+          jpackage \
+            --type deb \
+            --name DuckDash \
+            --app-version "$APP_VERSION" \
+            --input target/app \
+            --main-jar "$MAIN_JAR" \
+            --main-class edu.bauet.java.cse.duckrun.MainApp \
+            --runtime-image target/runtime \
+            --dest target \
+            --resource-dir src/packaging/linux \
+            --icon src/main/resources/images/logo/team_logo2.png \
+            --java-options "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
+            --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED" \
+            --description "2D side-scrolling runner game — help the Duck reach class on time" \
+            --vendor "Duck Dash Team"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuckDash-linux-deb
+          path: target/*.deb
+
+  # ═══════════════════════════════════════════════════════════════
+  #  LINUX — .AppImage
+  #
+  #  Fully independent job. Does its own checkout → build → jlink →
+  #  jpackage app-image → AppImage, from scratch. Shares nothing with
+  #  build-linux-deb above.
+  #
+  #  Runtime: built with the current AppImage/appimagetool (the
+  #  official successor to the old AppImageKit tool). It embeds the
+  #  modern type2-runtime, which has libfuse compiled statically into
+  #  the runtime itself instead of dynamically loading the system's
+  #  libfuse.so.2 at launch. That is exactly what was breaking
+  #  "./DuckDash-*.AppImage" on current distros — Ubuntu 24.04+,
+  #  Fedora 40+ and others stopped installing libfuse2/libfuse2t64 by
+  #  default, so the old runtime failed immediately with
+  #  "dlopen(): error loading libfuse.so.2" unless the user manually
+  #  installed that package or passed --appimage-extract-and-run.
+  #  With the statically-linked runtime, `./DuckDash-*.AppImage` runs
+  #  standalone with no extra flags and no extra packages.
+  #
+  #  No vendored GStreamer/FFmpeg here either — same reasoning as the
+  #  .deb job above. AppImage has no dependency-declaration mechanism,
+  #  so playback depends on the host's own GStreamer plugins (listed
+  #  in the README for users on a minimal/headless install).
+  # ═══════════════════════════════════════════════════════════════
+  build-linux-appimage:
+    runs-on: ubuntu-24.04   # pinned for reproducible build tooling only
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build with Maven
+        run: mvn clean package -DskipTests
+
+      - name: Build runtime image (jlink)
+        shell: bash
+        run: |
+          JAR_FILE=$(ls target/duckrun-*.jar | head -n 1)
+          jlink \
+            --module-path "$JAVA_HOME/jmods:target/deps:$JAR_FILE" \
+            --add-modules edu.bauet.java.cse.duckrun \
+            --output target/runtime \
+            --strip-debug \
+            --no-header-files \
+            --no-man-pages \
+            --compress=2
+
+      - name: Prepare application directory
+        shell: bash
+        run: |
+          mkdir -p target/app
+          cp target/duckrun-*.jar target/app/
+          cp target/deps/*.jar    target/app/
+
       - name: Create app-image
         shell: bash
         run: |
@@ -96,253 +200,25 @@ jobs:
             --java-options "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
             --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED"
 
-      # ── STEP 2: Bundle GStreamer 1.24 + FFmpeg 6 + orc ────────────────────
-      #
-      #  WHY FFmpeg 6.x:
-      #    gstreamer1.0-libav (the plugin that decodes MP3 and MP4) links
-      #    against libavcodec.so.60, libavformat.so.60, libavutil.so.58 etc.
-      #    Ubuntu 26.04 ships FFmpeg 7.x whose SONAMEs are .so.61/.so.59/…
-      #    The old .so.60 names are completely absent, so the libav plugin
-      #    fails to dlopen → no audio/video decoder → MediaPlayer throws
-      #    "Could not create player!" even though GStreamer core loads fine.
-      #    Bundling the Ubuntu 24.04 FFmpeg 6.x libs fixes this on all distros.
-      #
-      #  WHY liborc:
-      #    GStreamer uses orc for SIMD-accelerated audio/video processing.
-      #    Minor orc version bumps between Ubuntu releases occasionally
-      #    introduce new symbols that the 24.04-compiled GStreamer expects
-      #    but which are absent from older/newer system orc. Bundling avoids
-      #    this entirely.
-      - name: Bundle GStreamer 1.24 + FFmpeg 6 + orc into app-image
+      # AppRun is committed as-is under src/packaging/appimage/ and is
+      # no longer rewritten at build time — there is no per-run logic
+      # left to inject, so the checked-in file IS the production file.
+      - name: Assemble AppDir
         shell: bash
         run: |
-          GST_DIR="target/DuckDash/lib/gst"
-          GST_PLUGINS="${GST_DIR}/plugins"
-          mkdir -p "$GST_PLUGINS"
-          LIB_BASE="/usr/lib/x86_64-linux-gnu"
+          APPDIR="DuckDash.AppDir"
+          mkdir -p "$APPDIR"
+          cp -r target/DuckDash/bin "$APPDIR/"
+          cp -r target/DuckDash/lib "$APPDIR/"
+          cp src/packaging/appimage/AppRun "$APPDIR/AppRun"
+          chmod +x "$APPDIR/AppRun"
+          cp src/packaging/appimage/DuckDash.desktop "$APPDIR/"
+          cp src/main/resources/images/logo/team_logo2.png "$APPDIR/DuckDash.png"
 
-          # Core GStreamer 1.24 libs
-          for lib in \
-            libgstreamer-1.0.so.0 \
-            libgstbase-1.0.so.0 \
-            libgstapp-1.0.so.0 \
-            libgstaudio-1.0.so.0 \
-            libgstvideo-1.0.so.0 \
-            libgstpbutils-1.0.so.0; do
-            [ -f "${LIB_BASE}/${lib}" ] && cp "${LIB_BASE}/${lib}" "$GST_DIR/"
-          done
-
-          # All GStreamer plugins
-          [ -d "${LIB_BASE}/gstreamer-1.0" ] && \
-            cp "${LIB_BASE}/gstreamer-1.0/"*.so "$GST_PLUGINS/" 2>/dev/null || true
-
-          # FFmpeg 6.x (Ubuntu 24.04 SONAMEs) — required by gstreamer1.0-libav
-          for lib in \
-            libavcodec.so.60 \
-            libavformat.so.60 \
-            libavutil.so.58 \
-            libswresample.so.4 \
-            libswscale.so.7 \
-            libavfilter.so.9; do
-            [ -f "${LIB_BASE}/${lib}" ] && cp "${LIB_BASE}/${lib}" "$GST_DIR/"
-          done
-
-          # orc — SIMD acceleration lib used internally by GStreamer
-          [ -f "${LIB_BASE}/liborc-0.4.so.0" ] && \
-            cp "${LIB_BASE}/liborc-0.4.so.0" "$GST_DIR/"
-
-          echo "Core + FFmpeg libs : $(ls "$GST_DIR"/*.so  2>/dev/null | wc -l)"
-          echo "Plugins bundled    : $(ls "$GST_PLUGINS"/*.so 2>/dev/null | wc -l)"
-
-      - name: Resolve transitive media dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          GST_DIR="target/DuckDash/lib/gst"
-          GST_PLUGINS="${GST_DIR}/plugins"
-
-          changed=1
-          while [ "$changed" -eq 1 ]; do
-            changed=0
-            while IFS= read -r sofile; do
-              while IFS= read -r dep; do
-                [ -z "$dep" ] && continue
-                base="$(basename "$dep")"
-                if [ ! -f "${GST_DIR}/${base}" ]; then
-                  cp -L "$dep" "${GST_DIR}/${base}"
-                  changed=1
-                fi
-              done < <(ldd "$sofile" | awk '/=> \// {print $3}')
-            done < <(find "$GST_DIR" "$GST_PLUGINS" -maxdepth 1 -type f -name '*.so*')
-          done
-
-          echo "Bundled native media libs after closure: $(find "$GST_DIR" -maxdepth 1 -type f -name '*.so*' | wc -l)"
-
-      - name: Validate bundled media dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          GST_DIR="target/DuckDash/lib/gst"
-          GST_PLUGINS="${GST_DIR}/plugins"
-          failed=0
-
-          while IFS= read -r sofile; do
-            if ldd "$sofile" | grep -q "not found"; then
-              echo "Missing dependency in: $sofile"
-              ldd "$sofile" | grep "not found" || true
-              failed=1
-            fi
-          done < <(find "$GST_DIR" "$GST_PLUGINS" -maxdepth 1 -type f -name '*.so*')
-
-          if [ "$failed" -ne 0 ]; then
-            echo "Bundled media stack is incomplete."
-            exit 1
-          fi
-
-      # ── STEP 3: Write smart launcher wrappers and patch the app-image ──────
-      #
-      #  Uses Python (shell: python3 {0}) to write the wrapper scripts.
-      #  This completely avoids the heredoc-in-YAML indentation trap where
-      #  a heredoc terminator with leading spaces is never matched, leaving
-      #  the file empty or garbage.
-      #
-      #  Smart logic (shared by .deb wrapper and AppImage AppRun):
-      #    • Query gst-inspect-1.0 for the system GStreamer version.
-      #    • If version < 1.28 (compatible with JavaFX 21) → do nothing,
-      #      let the JVM find system GStreamer normally.
-      #    • If version ≥ 1.28, or gst-inspect-1.0 is absent → prepend
-      #      bundled lib/gst/ to LD_LIBRARY_PATH so the JVM loads our
-      #      GStreamer 1.24 + FFmpeg 6 instead of the system version.
-      #
-      #  Also copies DuckDash.cfg → DuckDash.bin.cfg so the renamed
-      #  binary can locate its jpackage configuration file.
-      - name: Patch app launcher with smart GStreamer wrapper
-        shell: python3 {0}
-        run: |
-          import os, stat, shutil
-
-          # Version-check block — identical logic used in both wrappers.
-          # All lines are Python list elements to avoid triple-quoted strings
-          # whose content would sit at column-0 and break YAML indentation
-          # stripping for the surrounding Python code.
-          GST_CHECK = '\n'.join([
-              '_GST_OK=0',
-              'if command -v gst-inspect-1.0 >/dev/null 2>&1; then',
-              "  _VER=$(gst-inspect-1.0 --version 2>/dev/null | awk 'NR==1{print $NF}')",
-              '  _MAJ=$(echo "$_VER" | cut -d. -f1)',
-              '  _MIN=$(echo "$_VER" | cut -d. -f2)',
-              '  [ "$_MAJ" -eq 1 ] 2>/dev/null && [ "$_MIN" -lt 28 ] 2>/dev/null && _GST_OK=1',
-              'fi',
-              'if [ "$_GST_OK" -eq 0 ]; then',
-              '  export LD_LIBRARY_PATH="${APPDIR}/lib/gst:${LD_LIBRARY_PATH:-}"',
-              '  export GST_PLUGIN_PATH="${APPDIR}/lib/gst/plugins"',
-              '  export GST_PLUGIN_SYSTEM_PATH_1_0="${APPDIR}/lib/gst/plugins"',
-              '  export GST_REGISTRY_1_0="${XDG_CACHE_HOME:-${HOME}/.cache}/duckdash-gst-registry.bin"',
-              'fi',
-          ])
-
-          # .deb launcher: must compute APPDIR from its own location
-          DEB_WRAPPER = '\n'.join([
-              '#!/bin/sh',
-              'APPDIR="$(cd "$(dirname "$0")/.." && pwd -P)"',
-              GST_CHECK,
-              'exec "${APPDIR}/bin/DuckDash.bin" "$@"',
-              '',
-          ])
-
-          # AppImage AppRun: $APPDIR is injected by the AppImage runtime
-          APPRUN = '\n'.join([
-              '#!/bin/bash',
-              GST_CHECK,
-              'exec "${APPDIR}/bin/DuckDash" "$@"',
-              '',
-          ])
-
-          def write_exec(path, content):
-              with open(path, 'w') as fh:
-                  fh.write(content)
-              s = os.stat(path)
-              os.chmod(path, s.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-          launcher = 'target/DuckDash/bin/DuckDash'
-
-          # Rename original jpackage binary → DuckDash.bin
-          shutil.copy2(launcher, launcher + '.bin')
-          s = os.stat(launcher + '.bin')
-          os.chmod(launcher + '.bin', s.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-          # jpackage names the config after the launcher binary.
-          # After renaming to DuckDash.bin the binary looks for DuckDash.bin.cfg.
-          shutil.copy2(
-              'target/DuckDash/lib/app/DuckDash.cfg',
-              'target/DuckDash/lib/app/DuckDash.bin.cfg',
-          )
-
-          # Write smart wrappers
-          write_exec(launcher, DEB_WRAPPER)
-          write_exec('src/packaging/appimage/AppRun', APPRUN)
-
-          print('launcher-wrapper  :', launcher)
-          print('AppRun            :', 'src/packaging/appimage/AppRun')
-          print('DuckDash.bin.cfg  :', 'target/DuckDash/lib/app/DuckDash.bin.cfg')
-
-      # ── STEP 3.5: Write the deb control file template ─────────────────────
-      #
-      #  jpackage on ubuntu-24.04 auto-generates a Depends: line filled with
-      #  Ubuntu 24.04 library names (libavcodec60, libicu74, libvpx9, …).
-      #  None of those package names exist on Ubuntu 26.04 (they are renamed
-      #  or version-bumped), so dpkg refuses to install with "dependency
-      #  problems".  Providing our own control template with NO Depends: line
-      #  is safe because:
-      #    • The JVM is fully self-contained (bundled by jlink).
-      #    • GStreamer 1.24 + FFmpeg 6 are bundled in lib/gst/ (Step 2).
-      #    • Remaining runtime deps (libc6, libstdc++6, libpthread) are
-      #      present on every Debian-based distro and need no declaration.
-      #
-      #  printf is used (not a heredoc) to avoid the YAML heredoc trap:
-      #  a heredoc terminator with leading spaces is never matched by bash,
-      #  which would silently write an empty or truncated file.
-      #
-      #  Variable names:
-      #    APPLICATION_PACKAGE, APPLICATION_VERSION, MAINTAINER, INSTALL_SIZE,
-      #    APPLICATION_DESCRIPTION — these are the exact tokens jpackage 21
-      #    substitutes.  INSTALL_SIZE (not INSTALLED_SIZE) is the correct name.
-      #  Architecture is hardcoded to amd64 because this job always runs on
-      #  the ubuntu-24.04 (x86_64) runner.
-      - name: Override deb control template (suppress auto-generated deps)
-        shell: bash
-        run: |
-          printf '%s\n' \
-            'Package: APPLICATION_PACKAGE' \
-            'Version: APPLICATION_VERSION' \
-            'Section: misc' \
-            'Priority: optional' \
-            'Architecture: amd64' \
-            'Maintainer: MAINTAINER' \
-            'Installed-Size: INSTALL_SIZE' \
-            'Description: APPLICATION_DESCRIPTION' \
-            > src/packaging/linux/control
-
-      # ── STEP 4: Create .deb from the patched app-image ────────────────────
-      - name: Create .deb installer
-        shell: bash
-        run: |
-          APP_VERSION="${GITHUB_REF_NAME#v}"
-          jpackage \
-            --type deb \
-            --app-image target/DuckDash \
-            --name DuckDash \
-            --app-version "$APP_VERSION" \
-            --dest target \
-            --resource-dir src/packaging/linux \
-            --description "2D side-scrolling runner game — help the Duck reach class on time" \
-            --vendor "Duck Dash Team"
-
-      # ── STEP 5: Build AppImage from the same patched app-image ─────────────
       - name: Download appimagetool
         run: |
           wget -q \
-            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" \
             -O appimagetool-x86_64.AppImage
           chmod +x appimagetool-x86_64.AppImage
 
@@ -350,29 +226,10 @@ jobs:
         shell: bash
         run: |
           APP_VERSION="${GITHUB_REF_NAME#v}"
-          APPDIR="DuckDash.AppDir"
-
-          mkdir -p "$APPDIR"
-          cp -r target/DuckDash/bin "$APPDIR/"
-          cp -r target/DuckDash/lib "$APPDIR/"
-
-          # AppRun was rewritten by the Python step above
-          cp src/packaging/appimage/AppRun "$APPDIR/AppRun"
-          chmod +x "$APPDIR/AppRun"
-
-          cp src/packaging/appimage/DuckDash.desktop "$APPDIR/"
-          cp src/main/resources/images/logo/team_logo2.png "$APPDIR/DuckDash.png"
-
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
             ./appimagetool-x86_64.AppImage \
-            "$APPDIR" \
+            "DuckDash.AppDir" \
             "target/DuckDash-${APP_VERSION}-linux-x86_64.AppImage"
-
-      - name: Upload .deb artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: DuckDash-linux-deb
-          path: target/*.deb
 
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
@@ -540,7 +397,7 @@ jobs:
   #  RELEASE — attach all artifacts to the GitHub Release
   # ═══════════════════════════════════════════════════════════════
   release:
-    needs: [build-linux, build-windows, build-macos-arm]
+    needs: [build-linux-deb, build-linux-appimage, build-windows, build-macos-arm]
     runs-on: ubuntu-latest
     permissions:
       contents: write

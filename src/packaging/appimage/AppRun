@@ -1,10 +1,16 @@
 #!/bin/bash
-# AppImage runtime entry point.
-# $APPDIR is set automatically by the AppImage runtime to the squashfs mount point.
-
-export LD_LIBRARY_PATH="${APPDIR}/lib/gst:${LD_LIBRARY_PATH:-}"
-export GST_PLUGIN_PATH="${APPDIR}/lib/gst/plugins"
-export GST_PLUGIN_SYSTEM_PATH_1_0="${APPDIR}/lib/gst/plugins"
-export GST_REGISTRY_1_0="${XDG_CACHE_HOME:-${HOME}/.cache}/duckdash-gst-registry.bin"
-
-exec "${APPDIR}/bin/DuckDash" "$@"
+# AppRun — DuckDash AppImage entry point.
+#
+# Deliberately does no environment juggling: DuckDash does not bundle a
+# private GStreamer/FFmpeg, so there is nothing to point the JVM at.
+# JavaFX's media module finds and uses whatever GStreamer 1.x plugins the
+# host system already has installed — the standard, documented way OpenJFX
+# Media works on Linux. See the README "Linux media playback" section for
+# the package list on distros that don't ship it out of the box.
+#
+# $APPDIR is exported automatically by the AppImage runtime when this file
+# executes from inside a mounted/extracted AppImage. The fallback below
+# lets this same script also work if AppRun is ever invoked directly from
+# an unpacked AppDir (e.g. local testing before packaging).
+HERE="${APPDIR:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}"
+exec "${HERE}/bin/DuckDash" "$@"

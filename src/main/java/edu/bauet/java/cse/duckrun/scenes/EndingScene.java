@@ -161,6 +161,7 @@ public class EndingScene {
             retry.play();
         } else {
             System.out.println("All retries exhausted — going to credits.");
+            MediaRuntime.reportExhausted("EndingScene/ending-video");
             Platform.runLater(this::navigateToCredits);
         }
     }
