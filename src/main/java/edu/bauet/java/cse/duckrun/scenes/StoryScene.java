@@ -157,6 +157,7 @@ public class StoryScene {
             retry.play();
         } else {
             System.out.println("All retries exhausted — showing image fallback.");
+            MediaRuntime.reportExhausted("StoryScene/opening-video");
             Platform.runLater(() -> showImageFallback(root, stage));
         }
     }
