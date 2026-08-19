@@ -9,23 +9,39 @@ jobs:
   # ═══════════════════════════════════════════════════════════════
   #  LINUX — .deb installer
   #
-  #  Fully independent job. Does its own checkout → build → jlink →
-  #  jpackage, from scratch. Shares no step, artifact, or app-image
-  #  with build-linux-appimage below — a failure or change on one
-  #  side can never affect the other.
+  #  Fully independent job: its own checkout → build → jlink →
+  #  jpackage → package. Shares no step or artifact with
+  #  build-linux-appimage below.
   #
-  #  No vendored GStreamer/FFmpeg/orc, no dependency-closure walk.
-  #  JavaFX 21's media module talks to whatever GStreamer 1.x the
-  #  target machine already has installed — this is the standard,
-  #  documented way OpenJFX Media works on Linux. The Depends: line
-  #  in the control template below tells apt/dpkg exactly which
-  #  GStreamer plugin sets DuckDash needs, so `apt install ./*.deb`
-  #  (or a plain `dpkg -i` followed by `apt --fix-broken install`)
-  #  pulls them in automatically. That is what fixes MP4 playback on
-  #  a fresh machine — the correct decoders are declared, not copied.
+  #  MEDIA PLAYBACK — the precise, cited root cause:
+  #  Per Oracle's own JavaFX 21 release notes: "Media playback does
+  #  not work on Ubuntu 26.04 ... This is because JavaFX Media does
+  #  not support libavcodec version 62 ... As a workaround, install
+  #  libavcodec version 61."
+  #  (https://docs.oracle.com/en/java/java-components/javafx/21/release-notes/)
+  #
+  #  GStreamer 1.28's core and most plugins are NOT the problem.
+  #  gstreamer1.0-libav specifically is, because on Ubuntu 26.04 it's
+  #  linked against libavcodec.so.62. This also explains why Windows
+  #  and macOS were never affected: JavaFX ships a fully self-
+  #  contained "GStreamer Lite" on those platforms and never touches
+  #  the OS's own FFmpeg — Linux is the only platform where JavaFX
+  #  Media reaches into the system's GStreamer/FFmpeg at all.
+  #
+  #  Fix: bundle a matched, self-consistent GStreamer 1.24 + FFmpeg 6
+  #  set (libavcodec.so.60 — safely under the broken v62) and force
+  #  the JVM to use it, unconditionally, on every machine.
+  #
+  #  That bundle is sourced from an "ubuntu:24.04" Docker container,
+  #  NOT from this job's own runner. This is what lets the runner
+  #  itself be ubuntu-26.04 (current, supported, "gstreamer 1.28 is
+  #  fine" per the above) while the one broken component (libav/
+  #  FFmpeg) still comes from a pinned, immutable, always-correct
+  #  source regardless of what GitHub ships as ubuntu-26.04/-latest
+  #  in the future.
   # ═══════════════════════════════════════════════════════════════
   build-linux-deb:
-    runs-on: ubuntu-24.04   # pinned for reproducible build tooling only
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout
@@ -66,14 +82,132 @@ jobs:
           cp target/duckrun-*.jar target/app/
           cp target/deps/*.jar    target/app/
 
-      # jpackage on Ubuntu auto-generates a Depends: line filled with
-      # exact SONAME-versioned library packages (libavcodec60, libicu74,
-      # …). Those exact names are frequently renamed or version-bumped
-      # between Ubuntu releases, so a .deb built this way can fail to
-      # install on any release other than the one it was built on.
-      # Providing our own control template replaces that with a short,
-      # stable list of real Debian/Ubuntu package names that have held
-      # the same names across releases for years.
+      # ── STEP 1: Create the jpackage app-image ─────────────────────────────
+      - name: Create app-image
+        shell: bash
+        run: |
+          APP_VERSION="${GITHUB_REF_NAME#v}"
+          MAIN_JAR=$(ls target/app/duckrun-*.jar | xargs -n 1 basename)
+          jpackage \
+            --type app-image \
+            --name DuckDash \
+            --app-version "$APP_VERSION" \
+            --input target/app \
+            --main-jar "$MAIN_JAR" \
+            --main-class edu.bauet.java.cse.duckrun.MainApp \
+            --runtime-image target/runtime \
+            --dest target \
+            --icon src/main/resources/images/logo/team_logo2.png \
+            --java-options "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
+            --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED"
+
+      # ── STEP 2: Fetch a matched GStreamer 1.24 + FFmpeg 6 set ──────────────
+      #
+      #  Runs entirely inside a pinned "ubuntu:24.04" container so the
+      #  result is identical no matter what this job's own runner OS
+      #  is or becomes. --download-only fetches these 8 packages AND
+      #  their real dependencies (resolved by apt itself, not
+      #  guessed) as .deb files — nothing is installed inside the
+      #  container's filesystem beyond the apt cache, and nothing on
+      #  the outer runner is touched at all.
+      - name: Fetch matched GStreamer 1.24 + FFmpeg 6 (Ubuntu 24.04 container)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p gst-stage
+          docker run --rm \
+            -v "$(pwd)/gst-stage:/out" \
+            ubuntu:24.04 \
+            bash -c '
+              set -euo pipefail
+              apt-get update
+              apt-get install --download-only -y \
+                libgstreamer1.0-0 \
+                libgstreamer-plugins-base1.0-0 \
+                gstreamer1.0-plugins-base \
+                gstreamer1.0-plugins-good \
+                gstreamer1.0-plugins-bad \
+                gstreamer1.0-plugins-ugly \
+                gstreamer1.0-libav \
+                gstreamer1.0-pulseaudio
+              for deb in /var/cache/apt/archives/*.deb; do
+                dpkg-deb -x "$deb" /out
+              done
+            '
+          echo "Staged shared objects: $(find gst-stage -name '*.so*' | wc -l)"
+
+      # ── STEP 3: Copy the exact, verified file set into the app-image ───────
+      #
+      #  A short, explicit, hand-picked list — not an open-ended scan.
+      #  Each entry here is copied by name; the build fails loudly
+      #  (no [ -f ] guard, no || true) if any one of them is missing.
+      - name: Bundle GStreamer + FFmpeg into app-image
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIB_BASE="$(pwd)/gst-stage/usr/lib/x86_64-linux-gnu"
+          GST_DIR="target/DuckDash/lib/gst"
+          GST_PLUGINS="${GST_DIR}/plugins"
+          mkdir -p "$GST_PLUGINS"
+
+          for lib in \
+            libgstreamer-1.0.so.0 \
+            libgstbase-1.0.so.0 \
+            libgstapp-1.0.so.0 \
+            libgstaudio-1.0.so.0 \
+            libgstvideo-1.0.so.0 \
+            libgstpbutils-1.0.so.0 \
+            libavcodec.so.60 \
+            libavformat.so.60 \
+            libavutil.so.58 \
+            libswresample.so.4 \
+            libswscale.so.7 \
+            libavfilter.so.9 \
+            liborc-0.4.so.0; do
+            cp "${LIB_BASE}/${lib}" "${GST_DIR}/"
+          done
+
+          cp "${LIB_BASE}/gstreamer-1.0/"*.so "$GST_PLUGINS/"
+
+          echo "Core + FFmpeg libs : $(ls "$GST_DIR"/*.so* 2>/dev/null | wc -l)"
+          echo "Plugins bundled    : $(ls "$GST_PLUGINS"/*.so 2>/dev/null | wc -l)"
+
+      # ── STEP 4: Verify the bundle is self-contained ────────────────────────
+      - name: Verify bundled media libraries resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          GST_DIR="target/DuckDash/lib/gst"
+          failed=0
+          while IFS= read -r sofile; do
+            if LD_LIBRARY_PATH="$GST_DIR" ldd "$sofile" | grep -q "not found"; then
+              echo "Missing dependency in: $sofile"
+              LD_LIBRARY_PATH="$GST_DIR" ldd "$sofile" | grep "not found" || true
+              failed=1
+            fi
+          done < <(find "$GST_DIR" -maxdepth 2 -type f -name '*.so*')
+          [ "$failed" -eq 0 ] || { echo "Bundled media stack is incomplete."; exit 1; }
+
+      # ── STEP 5: Point the launcher at the bundled GStreamer, always ────────
+      - name: Write GStreamer launcher wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          LAUNCHER="target/DuckDash/bin/DuckDash"
+          mv "$LAUNCHER" "${LAUNCHER}.bin"
+          cp target/DuckDash/lib/app/DuckDash.cfg target/DuckDash/lib/app/DuckDash.bin.cfg
+
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'APPDIR="$(cd "$(dirname "$0")/.." && pwd -P)"' \
+            'export LD_LIBRARY_PATH="${APPDIR}/lib/gst:${LD_LIBRARY_PATH:-}"' \
+            'export GST_PLUGIN_PATH="${APPDIR}/lib/gst/plugins"' \
+            'export GST_PLUGIN_SYSTEM_PATH_1_0="${APPDIR}/lib/gst/plugins"' \
+            'export GST_REGISTRY_1_0="${XDG_CACHE_HOME:-${HOME}/.cache}/duckdash-gst-registry.bin"' \
+            'exec "${APPDIR}/bin/DuckDash.bin" "$@"' \
+            > "$LAUNCHER"
+          chmod +x "$LAUNCHER"
+
       - name: Write deb control template
         shell: bash
         run: |
@@ -85,32 +219,21 @@ jobs:
             'Architecture: amd64' \
             'Maintainer: MAINTAINER' \
             'Installed-Size: INSTALL_SIZE' \
-            'Depends: gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav, gstreamer1.0-pulseaudio | gstreamer1.0-alsa' \
             'Description: APPLICATION_DESCRIPTION' \
             > src/packaging/linux/control
 
-      # Single jpackage call, straight from --input to --type deb.
-      # No intermediate app-image is needed — that indirection only
-      # existed to give a previous version of this pipeline a place
-      # to inject vendored native libraries before packaging.
+      # ── STEP 6: Package the patched app-image as a .deb ─────────────────────
       - name: Create .deb installer
         shell: bash
         run: |
           APP_VERSION="${GITHUB_REF_NAME#v}"
-          MAIN_JAR=$(ls target/app/duckrun-*.jar | xargs -n 1 basename)
           jpackage \
             --type deb \
+            --app-image target/DuckDash \
             --name DuckDash \
             --app-version "$APP_VERSION" \
-            --input target/app \
-            --main-jar "$MAIN_JAR" \
-            --main-class edu.bauet.java.cse.duckrun.MainApp \
-            --runtime-image target/runtime \
             --dest target \
             --resource-dir src/packaging/linux \
-            --icon src/main/resources/images/logo/team_logo2.png \
-            --java-options "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
-            --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED" \
             --description "2D side-scrolling runner game — help the Duck reach class on time" \
             --vendor "Duck Dash Team"
 
@@ -123,30 +246,22 @@ jobs:
   # ═══════════════════════════════════════════════════════════════
   #  LINUX — .AppImage
   #
-  #  Fully independent job. Does its own checkout → build → jlink →
+  #  Fully independent job: its own checkout → build → jlink →
   #  jpackage app-image → AppImage, from scratch. Shares nothing with
   #  build-linux-deb above.
   #
+  #  Media playback: same matched GStreamer 1.24 + FFmpeg 6 bundle,
+  #  same Ubuntu 24.04 container sourcing, same reasoning — see the
+  #  comment block at the top of build-linux-deb.
+  #
   #  Runtime: built with the current AppImage/appimagetool (the
   #  official successor to the old AppImageKit tool). It embeds the
-  #  modern type2-runtime, which has libfuse compiled statically into
-  #  the runtime itself instead of dynamically loading the system's
-  #  libfuse.so.2 at launch. That is exactly what was breaking
-  #  "./DuckDash-*.AppImage" on current distros — Ubuntu 24.04+,
-  #  Fedora 40+ and others stopped installing libfuse2/libfuse2t64 by
-  #  default, so the old runtime failed immediately with
-  #  "dlopen(): error loading libfuse.so.2" unless the user manually
-  #  installed that package or passed --appimage-extract-and-run.
-  #  With the statically-linked runtime, `./DuckDash-*.AppImage` runs
-  #  standalone with no extra flags and no extra packages.
-  #
-  #  No vendored GStreamer/FFmpeg here either — same reasoning as the
-  #  .deb job above. AppImage has no dependency-declaration mechanism,
-  #  so playback depends on the host's own GStreamer plugins (listed
-  #  in the README for users on a minimal/headless install).
+  #  modern type2-runtime, statically linked against libfuse, so
+  #  `./DuckDash-*.AppImage` runs standalone — no libfuse2/libfuse2t64
+  #  package required on the host, unlike the old runtime.
   # ═══════════════════════════════════════════════════════════════
   build-linux-appimage:
-    runs-on: ubuntu-24.04   # pinned for reproducible build tooling only
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout
@@ -200,9 +315,81 @@ jobs:
             --java-options "--add-opens=javafx.graphics/com.sun.javafx.application=ALL-UNNAMED" \
             --java-options "--add-opens=javafx.base/com.sun.javafx.runtime=ALL-UNNAMED"
 
-      # AppRun is committed as-is under src/packaging/appimage/ and is
-      # no longer rewritten at build time — there is no per-run logic
-      # left to inject, so the checked-in file IS the production file.
+      - name: Fetch matched GStreamer 1.24 + FFmpeg 6 (Ubuntu 24.04 container)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p gst-stage
+          docker run --rm \
+            -v "$(pwd)/gst-stage:/out" \
+            ubuntu:24.04 \
+            bash -c '
+              set -euo pipefail
+              apt-get update
+              apt-get install --download-only -y \
+                libgstreamer1.0-0 \
+                libgstreamer-plugins-base1.0-0 \
+                gstreamer1.0-plugins-base \
+                gstreamer1.0-plugins-good \
+                gstreamer1.0-plugins-bad \
+                gstreamer1.0-plugins-ugly \
+                gstreamer1.0-libav \
+                gstreamer1.0-pulseaudio
+              for deb in /var/cache/apt/archives/*.deb; do
+                dpkg-deb -x "$deb" /out
+              done
+            '
+          echo "Staged shared objects: $(find gst-stage -name '*.so*' | wc -l)"
+
+      - name: Bundle GStreamer + FFmpeg into app-image
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIB_BASE="$(pwd)/gst-stage/usr/lib/x86_64-linux-gnu"
+          GST_DIR="target/DuckDash/lib/gst"
+          GST_PLUGINS="${GST_DIR}/plugins"
+          mkdir -p "$GST_PLUGINS"
+
+          for lib in \
+            libgstreamer-1.0.so.0 \
+            libgstbase-1.0.so.0 \
+            libgstapp-1.0.so.0 \
+            libgstaudio-1.0.so.0 \
+            libgstvideo-1.0.so.0 \
+            libgstpbutils-1.0.so.0 \
+            libavcodec.so.60 \
+            libavformat.so.60 \
+            libavutil.so.58 \
+            libswresample.so.4 \
+            libswscale.so.7 \
+            libavfilter.so.9 \
+            liborc-0.4.so.0; do
+            cp "${LIB_BASE}/${lib}" "${GST_DIR}/"
+          done
+
+          cp "${LIB_BASE}/gstreamer-1.0/"*.so "$GST_PLUGINS/"
+
+          echo "Core + FFmpeg libs : $(ls "$GST_DIR"/*.so* 2>/dev/null | wc -l)"
+          echo "Plugins bundled    : $(ls "$GST_PLUGINS"/*.so 2>/dev/null | wc -l)"
+
+      - name: Verify bundled media libraries resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          GST_DIR="target/DuckDash/lib/gst"
+          failed=0
+          while IFS= read -r sofile; do
+            if LD_LIBRARY_PATH="$GST_DIR" ldd "$sofile" | grep -q "not found"; then
+              echo "Missing dependency in: $sofile"
+              LD_LIBRARY_PATH="$GST_DIR" ldd "$sofile" | grep "not found" || true
+              failed=1
+            fi
+          done < <(find "$GST_DIR" -maxdepth 2 -type f -name '*.so*')
+          [ "$failed" -eq 0 ] || { echo "Bundled media stack is incomplete."; exit 1; }
+
+      # AppRun is committed as-is under src/packaging/appimage/ and is not
+      # rewritten at build time — it already unconditionally points the
+      # JVM at lib/gst (see that file below).
       - name: Assemble AppDir
         shell: bash
         run: |
@@ -238,7 +425,7 @@ jobs:
           path: target/*.AppImage
 
   # ═══════════════════════════════════════════════════════════════
-  #  WINDOWS — .exe installer
+  #  WINDOWS — .exe installer  (unchanged — do not touch)
   # ═══════════════════════════════════════════════════════════════
   build-windows:
     runs-on: windows-latest
@@ -307,7 +494,7 @@ jobs:
           path: target/*.exe
 
   # ═══════════════════════════════════════════════════════════════
-  #  macOS ARM64 — .dmg (Apple Silicon M1/M2/M3)
+  #  macOS ARM64 — .dmg (Apple Silicon M1/M2/M3)  (unchanged — do not touch)
   # ═══════════════════════════════════════════════════════════════
   build-macos-arm:
     runs-on: macos-latest
